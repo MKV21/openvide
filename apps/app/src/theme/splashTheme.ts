@@ -58,3 +58,7 @@ export function getCachedThemeFamily(): ThemeFamily {
 export function getCachedIsDark(): boolean {
   return themeIdToMode(cachedThemeId) === "dark";
 }
+
+export function getCachedThemeId(): ThemeId {
+  return cachedThemeId;
+}

@@ -136,9 +136,16 @@ export function AiChatScreen({ route, navigation }: Props): JSX.Element {
   useEffect(() => {
     const unsubscribe = navigation.addListener("focus", () => {
       void refreshAvailableModels();
+      // Re-fetch session from daemon when screen regains focus (e.g. after notification tap
+      // or returning from background) so stale in-memory state gets updated.
+      // Must run BEFORE ensureSessionAttached — otherwise the attach marks the session as
+      // actively streaming and refreshSessionHistory skips it, leaving stale "running" status.
+      void refreshSessionHistory(sessionId).then(() => {
+        ensureSessionAttached(sessionId);
+      });
     });
     return unsubscribe;
-  }, [navigation, refreshAvailableModels]);
+  }, [navigation, refreshAvailableModels, refreshSessionHistory, ensureSessionAttached, sessionId]);
 
   const handleModeChange = useCallback((mode: string) => {
     if (session) {

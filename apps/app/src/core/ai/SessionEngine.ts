@@ -1,8 +1,5 @@
 import { AppState, type AppStateStatus } from "react-native";
 import { newId } from "../id";
-import {
-  notifySessionNeedsInput,
-} from "../notifications";
 import type {
   AiContentBlock,
   AiMessage,
@@ -198,9 +195,6 @@ export class SessionEngine {
         // Set awaiting_input when the AI asks the user a question
         if (isRequestUserInputToolName(toolName)) {
           this.updateStatus(session, "awaiting_input");
-          if (this.notificationsEnabled && this.appState !== "active") {
-            notifySessionNeedsInput(session.id, session.tool).catch(() => {});
-          }
         }
       } else if (event.block.type === "tool_result" && event.block.toolId) {
         // Find matching tool_use and update its status

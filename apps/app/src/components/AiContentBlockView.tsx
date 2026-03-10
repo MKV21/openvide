@@ -16,6 +16,15 @@ import { ToolUseCard } from "./ToolUseCard";
 import { cn } from "../lib/utils";
 import { useThemeColors } from "../constants/colors";
 
+/** Strip CLI system XML tags (e.g. <task-notification>...</task-notification>) and associated
+ *  boilerplate (e.g. "Read the output file to retrieve the result: ...") from display text */
+function stripSystemXml(text: string): string {
+  return text
+    .replace(/<(?:task-notification|system-reminder|error-details)[^>]*>[\s\S]*?<\/(?:task-notification|system-reminder|error-details)>\s*/g, "")
+    .replace(/Read the output file to retrieve the result:.*$/gm, "")
+    .trim();
+}
+
 // Custom markdown rules for syntax-highlighted fenced code blocks.
 // Signature: (node, children, parent, styles, inheritedStyles) per react-native-markdown-display
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -193,7 +202,9 @@ export const AiContentBlockView = React.memo(function AiContentBlockView({
   }), [accent, border, foreground, muted, mutedForeground]);
 
   switch (block.type) {
-    case "text":
+    case "text": {
+      const displayText = stripSystemXml(block.text ?? "");
+      if (displayText.length === 0) return null;
       return (
         <Markdown
           style={markdownStyles}
@@ -203,9 +214,10 @@ export const AiContentBlockView = React.memo(function AiContentBlockView({
             return false;
           }}
         >
-          {block.text ?? ""}
+          {displayText}
         </Markdown>
       );
+    }
 
     case "thinking": {
       const durationLabel = block.durationMs

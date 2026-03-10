@@ -190,7 +190,7 @@ export function SettingsScreen({ navigation }: Props): JSX.Element {
       <SectionCard title="App">
         <View className="flex-row items-center justify-between">
           <Text className="text-foreground text-[15px]">Version</Text>
-          <Text className="text-dimmed text-[15px]">0.1.0</Text>
+          <Text className="text-dimmed text-[15px]">0.1.1</Text>
         </View>
       </SectionCard>
     </ScrollView>

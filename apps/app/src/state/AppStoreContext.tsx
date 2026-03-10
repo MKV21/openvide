@@ -1114,7 +1114,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
       targetId,
       type: "tool-action",
       command: script,
-      timeoutSec: 120,
+      timeoutSec: 300,
       fallbackPhase: "install",
     });
   }, [startRun]);

@@ -75,30 +75,38 @@ export function HostDetailScreen({ route, navigation }: Props): JSX.Element {
     try {
       const run = await startDaemonInstall(targetId);
 
-      await new Promise<void>((resolve) => {
-        const unsub = subscribeRun(run.id, (updatedRun) => {
-          // Extract latest STEP progress from events for progress display
-          for (let i = updatedRun.events.length - 1; i >= 0; i--) {
-            const evt = updatedRun.events[i];
-            if (evt?.progress) {
-              setDaemonInstallStatus(`${evt.progress.label} (${evt.progress.current}/${evt.progress.total})`);
-              break;
-            }
-          }
+      const TERMINAL = ["completed", "failed", "cancelled", "timeout"];
 
-          if (["completed", "failed", "cancelled", "timeout"].includes(updatedRun.status)) {
-            unsub();
-            if (updatedRun.status === "completed") {
-              setDaemonInstallStatus("Verifying...");
-            } else {
-              // Extract last meaningful error line for display
-              const lastEvent = updatedRun.events[updatedRun.events.length - 1];
-              setDaemonInstallStatus(lastEvent?.message ?? `Install ${updatedRun.status}`);
+      // Run may already be finalized if it timed out while queued behind another SSH command
+      if (!TERMINAL.includes(run.status)) {
+        await new Promise<void>((resolve) => {
+          const unsub = subscribeRun(run.id, (updatedRun) => {
+            // Extract latest STEP progress from events for progress display
+            for (let i = updatedRun.events.length - 1; i >= 0; i--) {
+              const evt = updatedRun.events[i];
+              if (evt?.progress) {
+                setDaemonInstallStatus(`${evt.progress.label} (${evt.progress.current}/${evt.progress.total})`);
+                break;
+              }
             }
-            resolve();
-          }
+
+            if (TERMINAL.includes(updatedRun.status)) {
+              unsub();
+              if (updatedRun.status === "completed") {
+                setDaemonInstallStatus("Verifying...");
+              } else {
+                // Extract last meaningful error line for display
+                const lastEvent = updatedRun.events[updatedRun.events.length - 1];
+                setDaemonInstallStatus(lastEvent?.message ?? `Install ${updatedRun.status}`);
+              }
+              resolve();
+            }
+          });
         });
-      });
+      } else if (run.status !== "completed") {
+        const lastEvent = run.events[run.events.length - 1];
+        setDaemonInstallStatus(lastEvent?.message ?? `Install ${run.status}`);
+      }
 
       // Re-detect to update daemon status
       await runCliDetection(targetId);

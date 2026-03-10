@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Animated, StyleSheet, View } from "react-native";
+import { Animated, StyleSheet, Text, View } from "react-native";
 import * as SplashScreen from "expo-splash-screen";
 import LottieView from "lottie-react-native";
-import { getCachedThemeFamily, getCachedIsDark } from "../theme/splashTheme";
+import { getCachedThemeFamily, getCachedIsDark, getCachedThemeId } from "../theme/splashTheme";
+import { getThemePalette } from "../theme/palettes";
 import type { ThemeFamily } from "../theme/themeTypes";
+import type { OtaStatus } from "../core/updates";
 
 // All animations must be statically require()'d so Metro can bundle them.
 // 6 variants: 3 families × 2 modes (light/dark).
@@ -47,20 +49,36 @@ function pickDarkLayerBg(family: ThemeFamily): string {
 
 interface Props {
   children: React.ReactNode;
+  otaStatus?: OtaStatus;
 }
 
-export function AnimatedSplash({ children }: Props): JSX.Element {
+export function AnimatedSplash({ children, otaStatus }: Props): JSX.Element {
   const [overlayReady, setOverlayReady] = useState(false);
   const [animationStarted, setAnimationStarted] = useState(false);
   const [hidden, setHidden] = useState(false);
+  const [showOta, setShowOta] = useState(false);
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const bgFadeAnim = useRef(new Animated.Value(1)).current;
+  const otaFadeAnim = useRef(new Animated.Value(0)).current;
   const startTime = useRef(0);
   const hasFinished = useRef(false);
+
+  // Fade the OTA bar in/out smoothly
+  useEffect(() => {
+    if (otaStatus != null) {
+      setShowOta(true);
+      Animated.timing(otaFadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+    } else if (showOta) {
+      Animated.timing(otaFadeAnim, { toValue: 0, duration: 400, useNativeDriver: true }).start(
+        () => setShowOta(false),
+      );
+    }
+  }, [otaStatus, otaFadeAnim, showOta]);
 
   // Read cached theme family + mode (set by preloadThemeFamily before mount)
   const family = getCachedThemeFamily();
   const isDark = getCachedIsDark();
+  const palette = getThemePalette(getCachedThemeId());
   const animation = pickSplashAnimation(family, isDark);
   const overlayBg = pickOverlayBg(family, isDark);
   const darkLayerBg = pickDarkLayerBg(family);
@@ -123,9 +141,68 @@ export function AnimatedSplash({ children }: Props): JSX.Element {
               resizeMode="contain"
             />
           )}
+          {showOta && (
+            <Animated.View style={[styles.otaContainer, { opacity: otaFadeAnim }]}>
+              <Text style={[styles.otaLabel, { color: palette.mutedForeground }]}>
+                {otaStatus === "downloading" ? "Downloading update…" : "Checking for updates…"}
+              </Text>
+              <View style={[styles.otaTrack, { backgroundColor: palette.muted }]}>
+                <OtaProgressBar accentColor={palette.accent} indeterminate={otaStatus !== "downloading"} />
+              </View>
+            </Animated.View>
+          )}
         </Animated.View>
       )}
     </View>
+  );
+}
+
+function OtaProgressBar({ accentColor, indeterminate }: { accentColor: string; indeterminate: boolean }): JSX.Element {
+  const anim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (indeterminate) {
+      Animated.loop(
+        Animated.timing(anim, { toValue: 1, duration: 1200, useNativeDriver: true }),
+      ).start();
+    } else {
+      anim.setValue(0);
+      Animated.timing(anim, { toValue: 1, duration: 4000, useNativeDriver: true }).start();
+    }
+  }, [indeterminate, anim]);
+
+  if (indeterminate) {
+    return (
+      <Animated.View
+        style={[
+          styles.otaBar,
+          {
+            backgroundColor: accentColor,
+            width: "30%",
+            transform: [{
+              translateX: anim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [-60, 200],
+              }),
+            }],
+          },
+        ]}
+      />
+    );
+  }
+
+  return (
+    <Animated.View
+      style={[
+        styles.otaBar,
+        {
+          backgroundColor: accentColor,
+          width: "100%",
+          transform: [{
+            scaleX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }),
+          }],
+        },
+      ]}
+    />
   );
 }
 
@@ -139,5 +216,25 @@ const styles = StyleSheet.create({
   lottie: {
     width: 290,
     height: 290,
+  },
+  otaContainer: {
+    position: "absolute",
+    bottom: 80,
+    alignItems: "center",
+    width: "100%",
+  },
+  otaLabel: {
+    fontSize: 13,
+    marginBottom: 8,
+  },
+  otaTrack: {
+    width: 200,
+    height: 3,
+    borderRadius: 1.5,
+    overflow: "hidden",
+  },
+  otaBar: {
+    height: 3,
+    borderRadius: 1.5,
   },
 });

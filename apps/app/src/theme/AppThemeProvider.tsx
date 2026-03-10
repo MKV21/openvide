@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { createContext, use, useCallback, useEffect, useMemo, useState } from "react";
+import React, { createContext, use, useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { Appearance, View } from "react-native";
 import { useColorScheme } from "nativewind";
 import { vars } from "react-native-css-interop";
@@ -9,6 +9,7 @@ import { ALL_THEME_IDS, themeIdToFamily, themeIdToMode, toThemeId } from "./them
 import { resolveThemeCssVariables } from "./colorTokens";
 import { setCurrentThemeId } from "./themeRuntime";
 import { getAlternateIconName } from "./palettes";
+import { getCachedThemeId } from "./splashTheme";
 
 const OLD_STORAGE_KEY = "open-vide/theme-preference";
 const STORAGE_KEY = "open-vide/theme-preferences";
@@ -36,67 +37,40 @@ function switchAppIcon(themeId: ThemeId): void {
 
 export function AppThemeProvider({ children }: { children: React.ReactNode }): JSX.Element {
   const { setColorScheme } = useColorScheme();
-  const [themeId, setThemeIdState] = useState<ThemeId>("default-dark");
 
-  // Load persisted theme on mount (with migration from old formats)
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (cancelled) return;
+  // Initialize from the cache that preloadThemeFamily() already populated.
+  // This avoids a flash-inducing re-render from "default-dark" → actual theme.
+  const [themeId, setThemeIdState] = useState<ThemeId>(() => {
+    const id = getCachedThemeId();
+    setCurrentThemeId(id);
+    return id;
+  });
 
-        if (raw) {
-          // Case 1: New format — bare ThemeId string
-          if ((ALL_THEME_IDS as string[]).includes(raw)) {
-            applyTheme(raw as ThemeId);
-            return;
-          }
-          // Case 2: Old JSON format { family, mode }
-          try {
-            const parsed = JSON.parse(raw);
-            if (parsed.family && parsed.mode) {
-              const family = isThemeFamily(parsed.family) ? parsed.family : "default";
-              const mode = parsed.mode === "light" || parsed.mode === "dark"
-                ? parsed.mode
-                : (Appearance.getColorScheme() === "dark" ? "dark" : "light");
-              const id = toThemeId(family, mode);
-              applyTheme(id);
-              persistThemeId(id); // upgrade storage format
-              return;
-            }
-          } catch { /* not JSON */ }
-        }
-
-        // Case 3: Ancient single-string key
-        const oldRaw = await AsyncStorage.getItem(OLD_STORAGE_KEY);
-        if (cancelled) return;
-        if (oldRaw) {
-          const mode = oldRaw === "light" || oldRaw === "dark"
-            ? oldRaw
-            : (Appearance.getColorScheme() === "dark" ? "dark" : "light");
-          const id = toThemeId("claude", mode as AppColorMode);
-          applyTheme(id);
-          persistThemeId(id);
-          AsyncStorage.removeItem(OLD_STORAGE_KEY).catch(() => {});
-          return;
-        }
-
-        // Fresh install
-        applyTheme("default-dark");
-      } catch {
-        if (!cancelled) applyTheme("default-dark");
-      }
-    })();
-    return () => { cancelled = true; };
+  // Sync NativeWind color scheme before first paint
+  useLayoutEffect(() => {
+    try { setColorScheme(themeIdToMode(themeId)); } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function applyTheme(id: ThemeId): void {
-    setThemeIdState(id);
-    setCurrentThemeId(id);
-    try { setColorScheme(themeIdToMode(id)); } catch {}
-  }
+  // Persist migrated storage formats (old JSON / ancient key → bare ThemeId)
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        if (raw && !(ALL_THEME_IDS as string[]).includes(raw)) {
+          // Old format detected — persist as bare ThemeId
+          persistThemeId(themeId);
+        }
+        // Clean up ancient key if present
+        const oldRaw = await AsyncStorage.getItem(OLD_STORAGE_KEY);
+        if (oldRaw) {
+          persistThemeId(themeId);
+          AsyncStorage.removeItem(OLD_STORAGE_KEY).catch(() => {});
+        }
+      } catch { /* ignore */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const setThemeId = useCallback((id: ThemeId) => {
     setThemeIdState(id);

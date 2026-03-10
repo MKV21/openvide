@@ -1,5 +1,11 @@
 import type { ToolAction, ToolName } from "./types";
 
+/** PATH preamble for non-interactive SSH shells — covers macOS (Homebrew) and Linux VPS */
+const PATH_PREAMBLE = [
+  "export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$PATH",
+  'if [ -d "$HOME/.nvm/versions/node" ]; then for d in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$d" ] && export PATH="$d:$PATH"; done; fi',
+].join("\n");
+
 interface ToolSpec {
   label: string;
   npmPackage: string;
@@ -45,10 +51,11 @@ function nodePrereqScript(): string {
 function installScript(spec: ToolSpec): string {
   return [
     "set -e",
+    PATH_PREAMBLE,
     "echo 'STEP 1/4: Checking node/npm prerequisites'",
     nodePrereqScript(),
     `echo 'STEP 2/4: Installing ${spec.label}'`,
-    `npm install -g ${spec.npmPackage}`,
+    `npm install -g --no-audit --no-fund ${spec.npmPackage}`,
     `echo 'STEP 3/4: Verifying ${spec.binary}'`,
     `${spec.binary} --version`,
     "echo 'STEP 4/4: Install completed'",
@@ -58,10 +65,11 @@ function installScript(spec: ToolSpec): string {
 function updateScript(spec: ToolSpec): string {
   return [
     "set -e",
+    PATH_PREAMBLE,
     "echo 'STEP 1/3: Checking npm availability'",
     "command -v npm >/dev/null 2>&1",
     `echo 'STEP 2/3: Updating ${spec.label}'`,
-    `npm install -g ${spec.npmPackage}@latest`,
+    `npm install -g --no-audit --no-fund ${spec.npmPackage}@latest`,
     `echo 'STEP 3/3: Verifying ${spec.binary}'`,
     `${spec.binary} --version`,
   ].join("\n");
@@ -70,6 +78,7 @@ function updateScript(spec: ToolSpec): string {
 function verifyScript(spec: ToolSpec): string {
   return [
     "set -e",
+    PATH_PREAMBLE,
     "echo 'STEP 1/2: Checking CLI binary'",
     `if ! command -v ${spec.binary} >/dev/null 2>&1; then echo 'ERROR: ${spec.binary} not installed'; exit 1; fi`,
     "echo 'STEP 2/2: Fetching CLI version'",
@@ -80,6 +89,7 @@ function verifyScript(spec: ToolSpec): string {
 function uninstallScript(spec: ToolSpec): string {
   return [
     "set -e",
+    PATH_PREAMBLE,
     `echo 'STEP 1/2: Uninstalling ${spec.label}'`,
     `npm uninstall -g ${spec.npmPackage} || true`,
     "echo 'STEP 2/2: Validating uninstall'",
@@ -93,25 +103,20 @@ export function buildDaemonScript(action: DaemonAction): string {
   switch (action) {
     case "install":
       return [
-        "set -e",
-        "echo 'STEP 1/4: Checking node/npm prerequisites'",
-        nodePrereqScript(),
-        "echo 'STEP 2/4: Stopping running openvide-daemon'",
-        "openvide-daemon stop 2>/dev/null || true",
-        "echo 'STEP 3/4: Installing openvide-daemon@latest'",
-        "npm install -g @openvide/daemon@latest",
-        "echo 'STEP 4/4: Verifying openvide-daemon'",
+        PATH_PREAMBLE,
+        "echo 'STEP 1/2: Installing openvide-daemon'",
+        "npm install -g --no-audit --no-fund @openvide/daemon@latest",
+        "echo 'STEP 2/2: Verifying openvide-daemon'",
         "openvide-daemon version",
       ].join("\n");
     case "uninstall":
       return [
-        "set -e",
-        "echo 'STEP 1/3: Stopping daemon'",
+        PATH_PREAMBLE,
         "openvide-daemon stop 2>/dev/null || true",
-        "echo 'STEP 2/3: Uninstalling openvide-daemon'",
-        "npm uninstall -g @openvide/daemon || true",
-        "echo 'STEP 3/3: Validating uninstall'",
-        "if command -v openvide-daemon >/dev/null 2>&1; then echo 'WARNING: openvide-daemon still available'; exit 1; else echo 'Uninstall confirmed'; fi",
+        "echo 'STEP 1/2: Uninstalling openvide-daemon'",
+        "npm uninstall -g --no-audit --no-fund @openvide/daemon || true",
+        "echo 'STEP 2/2: Validating uninstall'",
+        "command -v openvide-daemon >/dev/null 2>&1 && echo 'WARNING: still available' || echo 'Uninstall confirmed'",
       ].join("\n");
     default:
       throw new Error(`Unsupported daemon action ${action}`);

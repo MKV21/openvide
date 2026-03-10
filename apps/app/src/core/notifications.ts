@@ -2,7 +2,6 @@ import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
-import type { ToolName } from "./types";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -28,69 +27,33 @@ export async function requestPermissions(): Promise<boolean> {
   return status === "granted";
 }
 
-export async function notifySessionComplete(
-  sessionId: string,
-  tool: ToolName,
-  summary?: string,
-): Promise<void> {
-  const toolLabel = tool.charAt(0).toUpperCase() + tool.slice(1);
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title: `${toolLabel} session completed`,
-      body: summary ?? "The AI session has finished.",
-      data: { sessionId, type: "session_complete" },
-      categoryIdentifier: "AI_SESSION",
-    },
-    trigger: null,
-  });
+/** Extract sessionId from a notification response */
+function extractSessionId(response: Notifications.NotificationResponse): string | undefined {
+  const data = response.notification.request.content.data as Record<string, unknown> | undefined;
+  const sessionId = data?.sessionId;
+  return typeof sessionId === "string" ? sessionId : undefined;
 }
 
-export async function notifySessionFailed(
-  sessionId: string,
-  tool: ToolName,
-  error: string,
-): Promise<void> {
-  const toolLabel = tool.charAt(0).toUpperCase() + tool.slice(1);
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title: `${toolLabel} session failed`,
-      body: error.slice(0, 200),
-      data: { sessionId, type: "session_failed" },
-      categoryIdentifier: "AI_SESSION",
-    },
-    trigger: null,
-  });
-}
-
-export async function notifySessionNeedsInput(
-  sessionId: string,
-  tool: ToolName,
-): Promise<void> {
-  const toolLabel = tool.charAt(0).toUpperCase() + tool.slice(1);
-  await Notifications.scheduleNotificationAsync({
-    content: {
-      title: `${toolLabel} needs your input`,
-      body: "The AI session is waiting for a response.",
-      data: { sessionId, type: "session_needs_input" },
-      categoryIdentifier: "AI_SESSION",
-    },
-    trigger: null,
-  });
-}
-
-/** Add notification tap handler - returns cleanup function */
+/** Add notification tap handler - returns cleanup function.
+ *  Also checks for a cold-start notification that launched the app. */
 export function addNotificationTapHandler(
   onTap: (sessionId: string) => void,
 ): () => void {
+  // Handle taps while app is running (foreground/background)
   const subscription = Notifications.addNotificationResponseReceivedListener(
     (response) => {
-      const data = response.notification.request.content.data as Record<string, unknown> | undefined;
-      const sessionId = data?.sessionId;
-      if (typeof sessionId === "string") {
-        onTap(sessionId);
-      }
+      const sessionId = extractSessionId(response);
+      if (sessionId) onTap(sessionId);
     },
   );
+
+  // Handle cold-start: notification that launched the app before listener was set up
+  Notifications.getLastNotificationResponseAsync().then((response) => {
+    if (!response) return;
+    const sessionId = extractSessionId(response);
+    if (sessionId) onTap(sessionId);
+  }).catch(() => {});
+
   return () => subscription.remove();
 }
 

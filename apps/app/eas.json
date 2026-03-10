@@ -22,14 +22,14 @@
     },
     "production": {
       "channel": "production",
-      "env": { "APP_VARIANT": "production", "COREPACK_ENABLE_STRICT": "0" }
+      "env": { "APP_VARIANT": "production", "COREPACK_ENABLE_STRICT": "0", "ENABLE_PUSH_NOTIFICATIONS": "1" }
     },
     "production:apk": {
       "channel": "production",
       "android": {
         "buildType": "apk"
       },
-      "env": { "APP_VARIANT": "production", "COREPACK_ENABLE_STRICT": "0" }
+      "env": { "APP_VARIANT": "production", "COREPACK_ENABLE_STRICT": "0", "ENABLE_PUSH_NOTIFICATIONS": "1" }
     }
   },
   "submit": {

@@ -1,6 +1,6 @@
 import "./global.css";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, StatusBar } from "react-native";
+import { Pressable, StatusBar, View } from "react-native";
 import { DefaultTheme, NavigationContainer, type NavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -16,7 +16,7 @@ import { QrScannerSheet } from "./src/screens/QrScannerSheet";
 import { DirectoryPicker } from "./src/screens/DirectoryPicker";
 import { PromptLibraryScreen } from "./src/screens/PromptLibraryScreen";
 import { ThemeStyleScreen } from "./src/screens/ThemeStyleScreen";
-import { AppStoreProvider } from "./src/state/AppStoreContext";
+import { AppStoreProvider, useAppStore } from "./src/state/AppStoreContext";
 import { ErrorBoundary } from "./src/components/ErrorBoundary";
 import { Icon } from "./src/components/Icon";
 import { useThemeColors } from "./src/constants/colors";
@@ -25,6 +25,7 @@ import { BiometricGate } from "./src/components/BiometricGate";
 import { AnimatedSplash } from "./src/components/AnimatedSplash";
 import { AppThemeProvider, useAppTheme } from "./src/theme/AppThemeProvider";
 import { preloadThemeFamily } from "./src/theme/splashTheme";
+import { checkForUpdateOnLaunch, type OtaStatus } from "./src/core/updates";
 
 function ThemeStatusBar(): JSX.Element {
   const { resolvedMode } = useAppTheme();
@@ -46,6 +47,9 @@ function ModalCloseButton({ onPress, color }: { onPress: () => void; color: stri
 
 function RootNavigator(): JSX.Element {
   const { background, foreground, card, accent, border } = useThemeColors();
+  const { sessions } = useAppStore();
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
   const navigationTheme = useMemo(() => ({
     ...DefaultTheme,
@@ -62,12 +66,35 @@ function RootNavigator(): JSX.Element {
 
   useEffect(() => {
     registerNotificationCategories().catch(() => {});
-    const cleanupNotifications = addNotificationTapHandler((sessionId) => {
-      if (navigationRef.current) {
-        navigationRef.current.navigate("Main", {
-          screen: "AiChat",
-          params: { sessionId },
-        });
+    const cleanupNotifications = addNotificationTapHandler((daemonSessionId) => {
+      __DEV__ && console.log(`[OV:notif] Tap handler fired, daemonSessionId=${daemonSessionId}`);
+
+      const tryNavigate = () => {
+        if (!navigationRef.current) {
+          __DEV__ && console.log("[OV:notif] navigationRef not ready");
+          return false;
+        }
+        const appSession = sessionsRef.current.find(
+          (s) => s.daemonSessionId === daemonSessionId || s.id === daemonSessionId,
+        );
+        __DEV__ && console.log(`[OV:notif] Matched session: ${appSession?.id ?? "NONE"} (searched ${sessionsRef.current.length} sessions)`);
+        if (appSession) {
+          navigationRef.current.navigate("Main", {
+            screen: "AiChat",
+            params: { sessionId: appSession.id },
+          });
+          return true;
+        }
+        return false;
+      };
+
+      // Try immediately, then retry a few times (sessions may still be loading on cold-start)
+      if (!tryNavigate()) {
+        let attempts = 0;
+        const interval = setInterval(() => {
+          attempts++;
+          if (tryNavigate() || attempts >= 5) clearInterval(interval);
+        }, 500);
       }
     });
     const cleanupUpdates = startUpdateChecker();
@@ -179,18 +206,26 @@ function RootNavigator(): JSX.Element {
 
 export default function App(): JSX.Element {
   const [ready, setReady] = useState(false);
+  const [otaStatus, setOtaStatus] = useState<OtaStatus>(null);
 
   useEffect(() => {
+    // Start OTA check in parallel — progress shown on splash overlay
+    checkForUpdateOnLaunch(5000, setOtaStatus);
+    // Only block on theme cache (fast AsyncStorage read) before mounting the tree
     preloadThemeFamily().then(() => setReady(true));
   }, []);
 
-  if (!ready) return <></>;
+  // While init is running (OTA check + theme preload), render a solid view
+  // matching the native splash background so there is never a white flash.
+  if (!ready) {
+    return <View style={{ flex: 1, backgroundColor: "#1E1E1E" }} />;
+  }
 
   return (
     <GestureHandlerRootView className="flex-1">
       <SafeAreaProvider>
         <AppThemeProvider>
-          <AnimatedSplash>
+          <AnimatedSplash otaStatus={otaStatus}>
             <BiometricGate>
               <GlassProvider>
                 <AppStoreProvider>

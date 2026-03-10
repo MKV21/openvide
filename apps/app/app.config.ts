@@ -151,6 +151,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         NSLocalNetworkUsageDescription:
           "This app connects to SSH servers on your local network to manage remote development tools.",
         NSBonjourServices: ["_ssh._tcp"],
+        ITSAppUsesNonExemptEncryption: false,
       },
     },
     android: {
