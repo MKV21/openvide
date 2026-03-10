@@ -1,5 +1,5 @@
 import "./global.css";
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StatusBar } from "react-native";
 import { DefaultTheme, NavigationContainer, type NavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -15,6 +15,7 @@ import { AddHostSheet } from "./src/screens/AddHostSheet";
 import { QrScannerSheet } from "./src/screens/QrScannerSheet";
 import { DirectoryPicker } from "./src/screens/DirectoryPicker";
 import { PromptLibraryScreen } from "./src/screens/PromptLibraryScreen";
+import { ThemeStyleScreen } from "./src/screens/ThemeStyleScreen";
 import { AppStoreProvider } from "./src/state/AppStoreContext";
 import { ErrorBoundary } from "./src/components/ErrorBoundary";
 import { Icon } from "./src/components/Icon";
@@ -23,6 +24,7 @@ import { GlassProvider } from "./src/components/GlassContainer";
 import { BiometricGate } from "./src/components/BiometricGate";
 import { AnimatedSplash } from "./src/components/AnimatedSplash";
 import { AppThemeProvider, useAppTheme } from "./src/theme/AppThemeProvider";
+import { preloadThemeFamily } from "./src/theme/splashTheme";
 
 function ThemeStatusBar(): JSX.Element {
   const { resolvedMode } = useAppTheme();
@@ -159,6 +161,16 @@ function RootNavigator(): JSX.Element {
               ),
             })}
           />
+          <RootStack.Screen
+            name="ThemeStyleSheet"
+            component={ThemeStyleScreen}
+            options={({ navigation }) => ({
+              title: "Theme Style",
+              headerLeft: () => (
+                <ModalCloseButton onPress={() => navigation.goBack()} color={foreground} />
+              ),
+            })}
+          />
         </RootStack.Group>
       </RootStack.Navigator>
     </NavigationContainer>
@@ -166,6 +178,14 @@ function RootNavigator(): JSX.Element {
 }
 
 export default function App(): JSX.Element {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    preloadThemeFamily().then(() => setReady(true));
+  }, []);
+
+  if (!ready) return <></>;
+
   return (
     <GestureHandlerRootView className="flex-1">
       <SafeAreaProvider>

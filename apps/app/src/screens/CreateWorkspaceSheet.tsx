@@ -22,7 +22,7 @@ export function CreateWorkspaceSheet({ route, navigation }: Props): JSX.Element 
     createWorkspace,
     getWorkspaceHostEligibility,
   } = useAppStore();
-  const { dimmed, accent, warning } = useThemeColors();
+  const { dimmed, accent, warning, primaryForeground } = useThemeColors();
 
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(route.params?.selectedTargetId ?? null);
   const [directory, setDirectory] = useState("");
@@ -240,8 +240,8 @@ export function CreateWorkspaceSheet({ route, navigation }: Props): JSX.Element 
         onPress={() => void handleCreate()}
         disabled={!canCreate}
       >
-        {creating && <ActivityIndicator size="small" color="#ffffff" />}
-        <Text className="text-white font-bold text-base">{creating ? "Creating..." : "Create Workspace"}</Text>
+        {creating && <ActivityIndicator size="small" color={primaryForeground} />}
+        <Text className="text-primary-foreground font-bold text-base">{creating ? "Creating..." : "Create Workspace"}</Text>
       </Pressable>
     </ScrollView>
   );

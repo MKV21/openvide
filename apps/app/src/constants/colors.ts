@@ -1,35 +1,26 @@
-import { useAppTheme, type ThemePreference } from "../theme/AppThemeProvider";
+import { useAppTheme } from "../theme/AppThemeProvider";
 import { resolveThemeColors } from "../theme/colorTokens";
-import { getResolvedThemeMode } from "../theme/themeRuntime";
-
-type ThemeColorMap = ReturnType<typeof resolveThemeColors>;
+import { getResolvedThemeMode, getThemeFamily } from "../theme/themeRuntime";
+import type { ThemeColors } from "../theme/palettes";
 
 /** Backward-compatible color object for non-hook contexts. */
-export const colors = new Proxy({} as ThemeColorMap, {
+export const colors = new Proxy({} as ThemeColors, {
   get(_target, prop) {
     if (typeof prop !== "string") return undefined;
-    const resolved = resolveThemeColors(getResolvedThemeMode());
-    return resolved[prop as keyof ThemeColorMap];
+    const resolved = resolveThemeColors(getThemeFamily(), getResolvedThemeMode());
+    return resolved[prop as keyof ThemeColors];
   },
-}) as ThemeColorMap;
+}) as ThemeColors;
 
 /** Hook that returns theme-aware colors + scheme controls */
 export function useThemeColors() {
-  const { themePreference, resolvedMode, setThemePreference } = useAppTheme();
-
-  const setColorScheme = (scheme: ThemePreference) => {
-    setThemePreference(scheme);
-  };
-
-  const toggleColorScheme = () => {
-    setThemePreference(resolvedMode === "dark" ? "light" : "dark");
-  };
+  const { themeId, setThemeId, resolvedMode, themeFamily } = useAppTheme();
 
   return {
-    ...resolveThemeColors(resolvedMode),
-    colorScheme: themePreference,
+    ...resolveThemeColors(themeFamily, resolvedMode),
+    themeId,
+    setThemeId,
     resolvedColorScheme: resolvedMode,
-    setColorScheme,
-    toggleColorScheme,
+    themeFamily,
   };
 }

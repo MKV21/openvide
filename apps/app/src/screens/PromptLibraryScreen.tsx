@@ -269,7 +269,7 @@ export function PromptLibraryScreen({ navigation }: Props): JSX.Element {
             onPress={handleSaveEditor}
             disabled={!canSave}
           >
-            <Text className="text-white font-bold text-base">Save</Text>
+            <Text className="text-primary-foreground font-bold text-base">Save</Text>
           </Pressable>
         </View>
       </Modal>

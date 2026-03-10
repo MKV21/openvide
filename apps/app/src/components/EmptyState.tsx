@@ -23,7 +23,7 @@ export function EmptyState({
       <Text className="text-muted-foreground text-[15px] text-center leading-[22px]">{message}</Text>
       {actionLabel != null && onAction != null && (
         <Pressable className="mt-2 bg-accent rounded-full px-8 py-4 active:opacity-80" onPress={onAction}>
-          <Text className="text-white font-bold text-[15px]">{actionLabel}</Text>
+          <Text className="text-primary-foreground font-bold text-[15px]">{actionLabel}</Text>
         </Pressable>
       )}
     </View>

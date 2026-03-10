@@ -1,57 +1,20 @@
-import { remoteDevTheme } from "../theme";
+import type { ThemeFamily, AppColorMode, ThemeId } from "./themeTypes";
+import { themeIdToFamily, themeIdToMode } from "./themeTypes";
+import { getPalette, type ThemeColors } from "./palettes";
 
-export type AppColorMode = "light" | "dark";
+// Re-export types so existing imports still work
+export type { AppColorMode } from "./themeTypes";
 
-export function resolveThemeColors(mode: AppColorMode) {
-  const t = remoteDevTheme.colors;
-  return {
-    // Semantic tokens
-    background: t.background[mode],
-    foreground: t.foreground[mode],
-    card: t.card[mode],
-    muted: t.muted[mode],
-    mutedForeground: t.mutedForeground[mode],
-    primary: t.primary[mode],
-    primaryForeground: t.primaryForeground[mode],
-    destructive: t.destructive[mode],
-    success: t.success[mode],
-    warning: t.warning[mode],
-    error: t.error[mode],
-    border: t.border[mode],
-    ring: t.ring[mode],
-
-    // Accent (terracotta)
-    accent: mode === "light" ? "#C4704B" : "#D4836B",
-
-    // App-specific semantic aliases
-    headerBg: t.background[mode],
-    pressedPrimary: mode === "light" ? "#3A3A3C" : "#636366",
-    dimmed: mode === "light" ? "#AEAEB2" : "#6D6860",
-    white: "#FFFFFF",
-    black: "#000000",
-    lightForeground: t.foreground[mode],
-
-    // Status variants
-    errorBg: mode === "light" ? "#FEF2F2" : "#3C2824",
-    errorLight: "#fca5a5",
-    errorBright: "#f87171",
-    warningLight: mode === "light" ? "#F5A623" : "#F4C86E",
-
-    // Neutral grays
-    neutral: mode === "light" ? "#8E8E93" : "#AAA59C",
-
-    // Tool badge colors (app-specific)
-    toolClaude: "#C4704B",
-    toolCodex: "#10A37F",
-    toolGemini: "#4285F4",
-
-    // Timeout/special
-    timeout: "#ea580c",
-  } as const;
+export function resolveThemeColors(family: ThemeFamily, mode: AppColorMode): ThemeColors {
+  return getPalette(family, mode);
 }
 
-export function resolveThemeCssVariables(mode: AppColorMode): Record<`--${string}`, string> {
-  const colors = resolveThemeColors(mode);
+export function resolveThemeColorsById(themeId: ThemeId): ThemeColors {
+  return resolveThemeColors(themeIdToFamily(themeId), themeIdToMode(themeId));
+}
+
+export function resolveThemeCssVariables(family: ThemeFamily, mode: AppColorMode): Record<`--${string}`, string> {
+  const colors = resolveThemeColors(family, mode);
   return {
     "--background": colors.background,
     "--foreground": colors.foreground,
@@ -71,4 +34,8 @@ export function resolveThemeCssVariables(mode: AppColorMode): Record<`--${string
     "--ring": colors.ring,
     "--dimmed": colors.dimmed,
   };
+}
+
+export function resolveThemeCssVariablesById(themeId: ThemeId): Record<`--${string}`, string> {
+  return resolveThemeCssVariables(themeIdToFamily(themeId), themeIdToMode(themeId));
 }

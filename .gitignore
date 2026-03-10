@@ -62,6 +62,11 @@ apps/app/google-play-service-account.json
 *.jks
 *.keystore
 
+# Build artifacts
+*.aab
+*.apk
+*.ipa
+
 # App variant configs & assets (contain personal bundle IDs / branded assets)
 # Copy the *.example.json files and fill in your own values
 apps/app/variants/*/config.json

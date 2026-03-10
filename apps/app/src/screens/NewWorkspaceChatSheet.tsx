@@ -21,7 +21,7 @@ const TOOL_LABELS: Record<ToolName, string> = {
 export function NewWorkspaceChatSheet({ route, navigation }: Props): JSX.Element {
   const { workspaceId } = route.params ?? {};
   const { getWorkspace, getTarget, createDraftSession } = useAppStore();
-  const { warning } = useThemeColors();
+  const { warning, primaryForeground } = useThemeColors();
 
   const workspace = workspaceId ? getWorkspace(workspaceId) : undefined;
   const target = workspace ? getTarget(workspace.targetId) : undefined;
@@ -115,8 +115,8 @@ export function NewWorkspaceChatSheet({ route, navigation }: Props): JSX.Element
         onPress={() => void handleCreate()}
         disabled={!canCreate}
       >
-        {creating && <ActivityIndicator size="small" color="#ffffff" />}
-        <Text className="text-white font-bold text-base">{creating ? "Creating..." : "Create Chat"}</Text>
+        {creating && <ActivityIndicator size="small" color={primaryForeground} />}
+        <Text className="text-primary-foreground font-bold text-base">{creating ? "Creating..." : "Create Chat"}</Text>
       </Pressable>
     </ScrollView>
   );

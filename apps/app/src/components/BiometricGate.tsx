@@ -59,7 +59,7 @@ function LockScreen({
         className="bg-accent rounded-full py-4 px-8 mt-6 items-center active:opacity-80"
         onPress={onTryAgain}
       >
-        <Text className="text-white font-bold text-base">Unlock with {label}</Text>
+        <Text className="text-primary-foreground font-bold text-base">Unlock with {label}</Text>
       </Pressable>
     </View>
   );

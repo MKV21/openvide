@@ -17,7 +17,7 @@ type Props = NativeStackScreenProps<MainStackParamList, "FileEditor">;
 export function FileEditorScreen({ route, navigation }: Props): JSX.Element {
   const { targetId, filePath } = route.params;
   const { getTarget, createDraftSession } = useAppStore();
-  const { accent, mutedForeground } = useThemeColors();
+  const { accent, mutedForeground, primaryForeground } = useThemeColors();
   const target = getTarget(targetId);
   const sshRef = useRef(new NativeSshClient());
   const editorRef = useRef<MonacoEditorRef>(null);
@@ -86,7 +86,7 @@ export function FileEditorScreen({ route, navigation }: Props): JSX.Element {
         >
           <Text
             className="text-sm font-semibold"
-            style={{ color: dirty ? "#FFFFFF" : mutedForeground }}
+            style={{ color: dirty ? primaryForeground : mutedForeground }}
           >
             {saving ? "Saving..." : "Save"}
           </Text>

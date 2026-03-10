@@ -45,7 +45,7 @@ export function DiffViewerScreen(): JSX.Element {
                 )}
                 onPress={() => setMode("unified")}
               >
-                <Text className={cn("text-xs font-semibold", mode === "unified" ? "text-white" : "text-muted-foreground")}>
+                <Text className={cn("text-xs font-semibold", mode === "unified" ? "text-primary-foreground" : "text-muted-foreground")}>
                   Unified
                 </Text>
               </Pressable>
@@ -56,7 +56,7 @@ export function DiffViewerScreen(): JSX.Element {
                 )}
                 onPress={() => setMode("split")}
               >
-                <Text className={cn("text-xs font-semibold", mode === "split" ? "text-white" : "text-muted-foreground")}>
+                <Text className={cn("text-xs font-semibold", mode === "split" ? "text-primary-foreground" : "text-muted-foreground")}>
                   Split
                 </Text>
               </Pressable>

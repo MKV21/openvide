@@ -91,6 +91,41 @@ export default ({ config }: ConfigContext): ExpoConfig => {
             "Allow $(PRODUCT_NAME) to use the microphone for voice input",
         },
       ],
+      [
+        "expo-alternate-app-icons",
+        [
+          {
+            name: "DefaultLight",
+            ios: { light: "./assets/icons/icon-default-light.png", dark: "./assets/icons/icon-default-light.png", tinted: "./assets/icons/icon-default-light-tinted.png" },
+            android: { foregroundImage: "./assets/icons/icon-default-light.png", backgroundColor: "#FFFFFF" },
+          },
+          {
+            name: "DefaultDark",
+            ios: { light: "./assets/icons/icon-default-dark.png", dark: "./assets/icons/icon-default-dark.png", tinted: "./assets/icons/icon-default-dark-tinted.png" },
+            android: { foregroundImage: "./assets/icons/icon-default-dark.png", backgroundColor: "#1E1E1E" },
+          },
+          {
+            name: "ClaudeLight",
+            ios: { light: "./assets/icons/icon-claude-light.png", dark: "./assets/icons/icon-claude-light.png", tinted: "./assets/icons/icon-claude-light-tinted.png" },
+            android: { foregroundImage: "./assets/icons/icon-claude-light.png", backgroundColor: "#FAF7F2" },
+          },
+          {
+            name: "ClaudeDark",
+            ios: { light: "./assets/icons/icon-claude-dark.png", dark: "./assets/icons/icon-claude-dark.png", tinted: "./assets/icons/icon-claude-dark-tinted.png" },
+            android: { foregroundImage: "./assets/icons/icon-claude-dark.png", backgroundColor: "#171614" },
+          },
+          {
+            name: "CodexLight",
+            ios: { light: "./assets/icons/icon-codex-light.png", dark: "./assets/icons/icon-codex-light.png", tinted: "./assets/icons/icon-codex-light-tinted.png" },
+            android: { foregroundImage: "./assets/icons/icon-codex-light.png", backgroundColor: "#FFFFFF" },
+          },
+          {
+            name: "CodexDark",
+            ios: { light: "./assets/icons/icon-codex-dark.png", dark: "./assets/icons/icon-codex-dark.png", tinted: "./assets/icons/icon-codex-dark-tinted.png" },
+            android: { foregroundImage: "./assets/icons/icon-codex-dark.png", backgroundColor: "#1E1E1E" },
+          },
+        ],
+      ],
       "expo-secure-store",
       "expo-updates",
       [

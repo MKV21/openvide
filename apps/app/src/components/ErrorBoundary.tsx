@@ -40,7 +40,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
             className="bg-accent rounded-full px-8 py-4 active:opacity-80"
             onPress={this.handleRestart}
           >
-            <Text className="text-white font-semibold text-base">Restart</Text>
+            <Text className="text-primary-foreground font-semibold text-base">Restart</Text>
           </Pressable>
         </View>
       );

@@ -36,15 +36,16 @@ export function SettingsScreen({ navigation }: Props): JSX.Element {
     setSpeechLanguage,
   } = useAppStore();
 
-  const { colorScheme, setColorScheme, accent, mutedForeground, muted } = useThemeColors();
+  const {
+    accent,
+    mutedForeground,
+    muted,
+  } = useThemeColors();
+
+  // iOS Switch thumb is always white — fall back to mutedForeground when accent is white (Codex dark)
+  const switchActiveTrack = accent === "#FFFFFF" ? mutedForeground : accent;
 
   const biometric = useBiometricSettings();
-
-  const APPEARANCE_OPTIONS = [
-    { value: "system" as const, label: "System", icon: "smartphone" as const },
-    { value: "light" as const, label: "Light", icon: "sun" as const },
-    { value: "dark" as const, label: "Dark", icon: "moon" as const },
-  ];
 
   const handleClearSessions = (): void => {
     Alert.alert(
@@ -77,27 +78,16 @@ export function SettingsScreen({ navigation }: Props): JSX.Element {
   return (
     <ScrollView className="flex-1 bg-background" contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
       <SectionCard title="Appearance">
-        <View className="flex-row gap-2">
-          {APPEARANCE_OPTIONS.map((opt) => {
-            const active = colorScheme === opt.value;
-            return (
-              <Pressable
-                key={opt.value}
-                className={cn(
-                  "flex-1 items-center py-3 rounded-2xl border-2",
-                  active ? "border-accent bg-muted" : "border-transparent bg-muted",
-                )}
-                onPress={() => setColorScheme(opt.value)}
-              >
-                <Icon name={opt.icon} size={20} color={active ? accent : mutedForeground} />
-                <Text className={cn("text-xs mt-1 font-semibold", active ? "text-accent" : "text-muted-foreground")}>
-                  {opt.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
+        <Pressable
+          className="bg-muted rounded-2xl p-3.5 flex-row items-center justify-between active:opacity-80"
+          onPress={() => navigation.getParent()?.navigate("ThemeStyleSheet")}
+        >
+          <View>
+            <Text className="text-accent font-semibold text-sm">Theme Style</Text>
+            <Text className="text-dimmed text-xs mt-0.5">Choose your app theme</Text>
+          </View>
+          <Icon name="chevron-right" size={18} color={mutedForeground} />
+        </Pressable>
       </SectionCard>
 
       <SectionCard title="Security">
@@ -114,7 +104,7 @@ export function SettingsScreen({ navigation }: Props): JSX.Element {
             value={biometric.enabled}
             onValueChange={(v) => void biometric.toggle(v)}
             disabled={!biometric.available || biometric.loading}
-            trackColor={{ false: muted, true: accent }}
+            trackColor={{ false: muted, true: switchActiveTrack }}
           />
         </View>
       </SectionCard>
@@ -130,7 +120,7 @@ export function SettingsScreen({ navigation }: Props): JSX.Element {
           <Switch
             value={showToolDetails}
             onValueChange={setShowToolDetails}
-            trackColor={{ false: muted, true: accent }}
+            trackColor={{ false: muted, true: switchActiveTrack }}
           />
         </View>
       </SectionCard>
@@ -146,7 +136,7 @@ export function SettingsScreen({ navigation }: Props): JSX.Element {
           <Switch
             value={notificationsEnabled}
             onValueChange={(v) => void handleNotificationsToggle(v)}
-            trackColor={{ false: muted, true: accent }}
+            trackColor={{ false: muted, true: switchActiveTrack }}
           />
         </View>
       </SectionCard>

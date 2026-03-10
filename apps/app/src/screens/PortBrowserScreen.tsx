@@ -76,7 +76,7 @@ async function scanPorts(
 export function PortBrowserScreen({ route, navigation }: Props): JSX.Element {
   const { targetId } = route.params;
   const { getTarget } = useAppStore();
-  const { accent, mutedForeground } = useThemeColors();
+  const { accent, mutedForeground, primaryForeground } = useThemeColors();
   const target = getTarget(targetId);
   const sshRef = useRef(new NativeSshClient());
 
@@ -169,8 +169,8 @@ export function PortBrowserScreen({ route, navigation }: Props): JSX.Element {
                     title: `Port ${item.port}`,
                   })}
                 >
-                  <Icon name="eye" size={14} color="#FFFFFF" />
-                  <Text className="text-white text-xs font-semibold">Preview</Text>
+                  <Icon name="eye" size={14} color={primaryForeground} />
+                  <Text className="text-primary-foreground text-xs font-semibold">Preview</Text>
                 </Pressable>
                 <Pressable
                   className="flex-1 flex-row items-center justify-center gap-1.5 bg-muted rounded-lg py-2 active:opacity-80"

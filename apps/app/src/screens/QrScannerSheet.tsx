@@ -49,7 +49,7 @@ export function QrScannerSheet({ navigation }: Props): JSX.Element {
           className="bg-accent rounded-full px-6 py-3 active:opacity-80"
           onPress={requestPermission}
         >
-          <Text className="text-white font-bold text-base">Grant Camera Access</Text>
+          <Text className="text-primary-foreground font-bold text-base">Grant Camera Access</Text>
         </Pressable>
       </View>
     );

@@ -353,7 +353,7 @@ export function FileBrowserScreen(): JSX.Element {
               <Text
                 className={cn(
                   "text-sm font-semibold",
-                  searchMode === "filter" ? "text-white" : "text-muted-foreground",
+                  searchMode === "filter" ? "text-primary-foreground" : "text-muted-foreground",
                 )}
               >
                 Filter
@@ -369,7 +369,7 @@ export function FileBrowserScreen(): JSX.Element {
               <Text
                 className={cn(
                   "text-sm font-semibold",
-                  searchMode === "find" ? "text-white" : "text-muted-foreground",
+                  searchMode === "find" ? "text-primary-foreground" : "text-muted-foreground",
                 )}
               >
                 Find

@@ -59,7 +59,7 @@ export function SelectionActionBar({
               }
             }}
           >
-            <Text className="text-white text-xs font-semibold">Send</Text>
+            <Text className="text-primary-foreground text-xs font-semibold">Send</Text>
           </Pressable>
           <Pressable
             className="bg-muted rounded-lg px-3 justify-center active:opacity-80"
@@ -84,7 +84,7 @@ export function SelectionActionBar({
         className="bg-accent rounded-lg px-3 py-1.5 active:opacity-80"
         onPress={() => onAskAi(buildPrompt("Explain this code"))}
       >
-        <Text className="text-white text-xs font-semibold">Explain</Text>
+        <Text className="text-primary-foreground text-xs font-semibold">Explain</Text>
       </Pressable>
       <Pressable
         className="bg-muted rounded-lg px-3 py-1.5 active:opacity-80"

@@ -19,20 +19,23 @@ const BG_CLASS: Record<string, string> = {
   installed: "bg-success",
 };
 
+const ACCENT_STATES = new Set(["connecting", "running"]);
+
 export function StatePill({ value }: { value: string }): JSX.Element {
   const { glassEnabled } = useGlassEnabled();
+  const textClass = ACCENT_STATES.has(value) ? "text-primary-foreground" : "text-white";
 
   if (glassEnabled) {
     return (
       <GlassContainer variant="pill" className={cn("self-start rounded-full px-2.5 py-1", BG_CLASS[value] ?? "bg-border")}>
-        <Text className="text-white font-semibold text-xs">{value}</Text>
+        <Text className={cn(textClass, "font-semibold text-xs")}>{value}</Text>
       </GlassContainer>
     );
   }
 
   return (
     <View className={cn("self-start rounded-full px-2.5 py-1", BG_CLASS[value] ?? "bg-border")}>
-      <Text className="text-white font-semibold text-xs">{value}</Text>
+      <Text className={cn(textClass, "font-semibold text-xs")}>{value}</Text>
     </View>
   );
 }

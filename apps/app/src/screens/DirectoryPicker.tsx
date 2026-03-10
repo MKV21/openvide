@@ -297,7 +297,7 @@ export function DirectoryPicker({ route, navigation }: Props): JSX.Element {
           onPress={handleSelect}
           disabled={!canSelect}
         >
-          <Text className="text-white font-bold text-base">Select</Text>
+          <Text className="text-primary-foreground font-bold text-base">Select</Text>
         </Pressable>
       </View>
 

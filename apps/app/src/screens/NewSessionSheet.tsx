@@ -24,7 +24,7 @@ const TOOL_LABELS: Record<ToolName, string> = {
 
 export function NewSessionSheet({ route, navigation }: Props): JSX.Element {
   const { targets, createDraftSession } = useAppStore();
-  const { dimmed, accent, warning } = useThemeColors();
+  const { dimmed, accent, warning, primaryForeground } = useThemeColors();
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [selectedTool, setSelectedTool] = useState<ToolName | null>(null);
   const [workingDirectory, setWorkingDirectory] = useState("");
@@ -250,8 +250,8 @@ export function NewSessionSheet({ route, navigation }: Props): JSX.Element {
           onPress={handleStart}
           disabled={!canStart || starting}
         >
-          {starting && <ActivityIndicator size="small" color="#ffffff" />}
-          <Text className="text-white font-bold text-base">{starting ? "Starting..." : "Start Session"}</Text>
+          {starting && <ActivityIndicator size="small" color={primaryForeground} />}
+          <Text className="text-primary-foreground font-bold text-base">{starting ? "Starting..." : "Start Session"}</Text>
         </Pressable>
       </ScrollView>
   );

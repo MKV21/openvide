@@ -28,6 +28,7 @@ export type ModalStackParamList = {
   QrScannerSheet: undefined;
   DirectoryPicker: { targetId: string; currentPath?: string; returnTo?: "NewSessionSheet" | "CreateWorkspaceSheet"; returnState?: Record<string, unknown> };
   PromptLibrarySheet: undefined;
+  ThemeStyleSheet: undefined;
 };
 
 export type RootStackParamList = {

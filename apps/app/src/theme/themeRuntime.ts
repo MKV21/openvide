@@ -1,11 +1,22 @@
-import type { AppColorMode } from "./colorTokens";
+import type { AppColorMode, ThemeFamily, ThemeId } from "./themeTypes";
+import { themeIdToFamily, themeIdToMode } from "./themeTypes";
 
-let currentResolvedThemeMode: AppColorMode = "light";
+let currentThemeId: ThemeId = "default-dark";
 
-export function setResolvedThemeMode(mode: AppColorMode): void {
-  currentResolvedThemeMode = mode;
+export function setCurrentThemeId(id: ThemeId): void {
+  currentThemeId = id;
 }
 
+export function getCurrentThemeId(): ThemeId {
+  return currentThemeId;
+}
+
+/** Derived — used by the `colors` Proxy in constants/colors.ts */
 export function getResolvedThemeMode(): AppColorMode {
-  return currentResolvedThemeMode;
+  return themeIdToMode(currentThemeId);
+}
+
+/** Derived — used by the `colors` Proxy in constants/colors.ts */
+export function getThemeFamily(): ThemeFamily {
+  return themeIdToFamily(currentThemeId);
 }

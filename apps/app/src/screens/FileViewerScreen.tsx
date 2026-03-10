@@ -21,7 +21,7 @@ export function FileViewerScreen(): JSX.Element {
   const navigation = useNavigation<any>();
   const { targetId, filePath } = route.params;
   const { getTarget, createDraftSession } = useAppStore();
-  const { accent, mutedForeground } = useThemeColors();
+  const { accent, mutedForeground, primaryForeground } = useThemeColors();
   const target = getTarget(targetId);
 
   const [content, setContent] = useState<string | null>(null);
@@ -208,9 +208,9 @@ export function FileViewerScreen(): JSX.Element {
                 disabled={saving || !dirty}
               >
                 {saving ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
+                  <ActivityIndicator size="small" color={primaryForeground} />
                 ) : (
-                  <Text className={cn("text-xs font-semibold", dirty ? "text-white" : "text-muted-foreground")}>
+                  <Text className={cn("text-xs font-semibold", dirty ? "text-primary-foreground" : "text-muted-foreground")}>
                     Save
                   </Text>
                 )}
@@ -224,7 +224,7 @@ export function FileViewerScreen(): JSX.Element {
                     onPress={() => navigation.navigate("FileEditor", { targetId, filePath })}
                     className="px-3 py-1.5 bg-accent rounded-lg active:opacity-80"
                   >
-                    <Text className="text-white text-xs font-semibold">Code Editor</Text>
+                    <Text className="text-primary-foreground text-xs font-semibold">Code Editor</Text>
                   </Pressable>
                   <Pressable
                     onPress={handleEnterEdit}
@@ -308,8 +308,8 @@ export function FileViewerScreen(): JSX.Element {
               className="flex-1 flex-row items-center justify-center gap-2 bg-accent rounded-xl py-3 active:opacity-80"
               onPress={handleAskAi}
             >
-              <Icon name="message-circle" size={16} color="#FFFFFF" />
-              <Text className="text-white text-sm font-semibold">Ask AI</Text>
+              <Icon name="message-circle" size={16} color={primaryForeground} />
+              <Text className="text-primary-foreground text-sm font-semibold">Ask AI</Text>
             </Pressable>
           </View>
         </>

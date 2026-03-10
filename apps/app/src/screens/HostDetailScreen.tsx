@@ -34,7 +34,7 @@ export function HostDetailScreen({ route, navigation }: Props): JSX.Element {
     readinessByTarget,
   } = useAppStore();
 
-  const { accent, success, destructive } = useThemeColors();
+  const { accent, success, destructive, primaryForeground } = useThemeColors();
   const target = getTarget(targetId);
   const [detecting, setDetecting] = useState(false);
   const [installingDaemon, setInstallingDaemon] = useState(false);
@@ -183,9 +183,9 @@ export function HostDetailScreen({ route, navigation }: Props): JSX.Element {
               disabled={installingDaemon}
             >
               {installingDaemon ? (
-                <ActivityIndicator size="small" color="#ffffff" />
+                <ActivityIndicator size="small" color={primaryForeground} />
               ) : (
-                <Text className="text-white font-semibold text-xs">{daemonCtaLabel}</Text>
+                <Text className="text-primary-foreground font-semibold text-xs">{daemonCtaLabel}</Text>
               )}
             </Pressable>
           )}

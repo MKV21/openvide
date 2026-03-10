@@ -33,7 +33,7 @@ type ConnectionPhase = "idle" | "testing" | "saving";
 
 export function AddHostSheet({ navigation, route }: Props): JSX.Element {
   const { createTarget, testConnectionBeforeSave } = useAppStore();
-  const { accent, dimmed } = useThemeColors();
+  const { accent, dimmed, primaryForeground } = useThemeColors();
   const qrPayload = route.params?.qrPayload;
 
   const [label, setLabel] = useState("");
@@ -288,8 +288,8 @@ export function AddHostSheet({ navigation, route }: Props): JSX.Element {
           onPress={handleSave}
           disabled={!canSave || busy}
         >
-          {busy && <ActivityIndicator size="small" color="#ffffff" />}
-          <Text className="text-white font-bold text-base">{buttonLabel}</Text>
+          {busy && <ActivityIndicator size="small" color={primaryForeground} />}
+          <Text className="text-primary-foreground font-bold text-base">{buttonLabel}</Text>
         </Pressable>
       </ScrollView>
   );

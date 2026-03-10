@@ -84,7 +84,7 @@ export function InputBar({
   onVoiceEnd?: () => void;
   onAttachPress?: () => void;
 }): JSX.Element {
-  const { accent, dimmed } = useThemeColors();
+  const { accent, dimmed, primaryForeground } = useThemeColors();
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -195,7 +195,7 @@ export function InputBar({
                   </View>
                 ) : hasText ? (
                   <View className="w-9 h-9 rounded-full bg-accent items-center justify-center">
-                    <Icon name="send" size={18} color="#FFFFFF" />
+                    <Icon name="send" size={18} color={primaryForeground} />
                   </View>
                 ) : (
                   <Icon name="mic" size={22} color={dimmed} />
