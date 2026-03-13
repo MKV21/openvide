@@ -1,0 +1,11 @@
+{
+  "package_id": "com.openvide.g2",
+  "edition": "202603",
+  "name": "open-vide",
+  "version": "0.1.0",
+  "min_app_version": "0.1.0",
+  "tagline": "Glanceable HUD for dev workflows",
+  "description": "A thin, glanceable HUD and control layer for developer/agent workflows on Even Realities G2",
+  "author": "Open Vide",
+  "entrypoint": "index.html"
+}

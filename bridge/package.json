@@ -1,0 +1,10 @@
+{
+  "name": "openvide-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npx tsx http-bridge.ts",
+    "build": "npx tsc http-bridge.ts --outDir dist --module nodenext --moduleResolution nodenext --target es2022"
+  }
+}
