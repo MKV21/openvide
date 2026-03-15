@@ -113,5 +113,6 @@ export function useAppTheme(): AppThemeContextValue {
 }
 
 function isThemeFamily(value: string): value is ThemeFamily {
-  return value === "default" || value === "claude" || value === "codex";
+  return value === "default" || value === "claude" || value === "codex"
+    || value === "catppuccin" || value === "dracula" || value === "tokyonight";
 }

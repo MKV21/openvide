@@ -1,4 +1,4 @@
-export type ThemeFamily = "default" | "claude" | "codex";
+export type ThemeFamily = "default" | "claude" | "codex" | "catppuccin" | "dracula" | "tokyonight";
 export type AppColorMode = "light" | "dark";
 
 export type ThemeId =
@@ -7,7 +7,13 @@ export type ThemeId =
   | "claude-light"
   | "claude-dark"
   | "codex-light"
-  | "codex-dark";
+  | "codex-dark"
+  | "catppuccin-light"
+  | "catppuccin-dark"
+  | "dracula-light"
+  | "dracula-dark"
+  | "tokyonight-light"
+  | "tokyonight-dark";
 
 export const ALL_THEME_IDS: ThemeId[] = [
   "default-light",
@@ -16,14 +22,22 @@ export const ALL_THEME_IDS: ThemeId[] = [
   "claude-dark",
   "codex-light",
   "codex-dark",
+  "catppuccin-light",
+  "catppuccin-dark",
+  "dracula-light",
+  "dracula-dark",
+  "tokyonight-light",
+  "tokyonight-dark",
 ];
 
 export function themeIdToFamily(id: ThemeId): ThemeFamily {
-  return id.split("-")[0] as ThemeFamily;
+  const parts = id.split("-");
+  return parts.slice(0, -1).join("-") as ThemeFamily;
 }
 
 export function themeIdToMode(id: ThemeId): AppColorMode {
-  return id.split("-")[1] as AppColorMode;
+  const parts = id.split("-");
+  return parts[parts.length - 1] as AppColorMode;
 }
 
 export function toThemeId(family: ThemeFamily, mode: AppColorMode): ThemeId {

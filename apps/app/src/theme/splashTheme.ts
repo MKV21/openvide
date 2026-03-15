@@ -6,7 +6,7 @@ import { ALL_THEME_IDS, themeIdToFamily, themeIdToMode, toThemeId } from "./them
 const STORAGE_KEY = "open-vide/theme-preferences";
 const OLD_STORAGE_KEY = "open-vide/theme-preference";
 
-let cachedThemeId: ThemeId = "default-dark";
+let cachedThemeId: ThemeId = "catppuccin-dark";
 
 /**
  * Read the persisted ThemeId from AsyncStorage before React mounts.

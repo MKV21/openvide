@@ -209,10 +209,15 @@ export default function App(): JSX.Element {
   const [otaStatus, setOtaStatus] = useState<OtaStatus>(null);
 
   useEffect(() => {
-    // Start OTA check in parallel — progress shown on splash overlay
-    checkForUpdateOnLaunch(5000, setOtaStatus);
     // Only block on theme cache (fast AsyncStorage read) before mounting the tree
-    preloadThemeFamily().then(() => setReady(true));
+    preloadThemeFamily().then(() => {
+      setReady(true);
+      // Defer OTA check until after the first render frame so it doesn't
+      // compete with the initial layout and delay the splash handoff.
+      requestAnimationFrame(() => {
+        checkForUpdateOnLaunch(3000, setOtaStatus);
+      });
+    });
   }, []);
 
   // While init is running (OTA check + theme preload), render a solid view

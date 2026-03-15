@@ -8,7 +8,8 @@ import type { ThemeFamily } from "../theme/themeTypes";
 import type { OtaStatus } from "../core/updates";
 
 // All animations must be statically require()'d so Metro can bundle them.
-// 6 variants: 3 families × 2 modes (light/dark).
+// 6 variants: 3 original families × 2 modes (light/dark).
+// New families (catppuccin, dracula, tokyonight) fall back to default animations.
 const splashAnimations = {
   "default-light": require("../../assets/splash-animations/default-light-splash.json"),
   "default-dark": require("../../assets/splash-animations/default-dark-splash.json"),
@@ -23,20 +24,27 @@ const splashAnimations = {
 
 SplashScreen.preventAutoHideAsync();
 
-const SAFETY_TIMEOUT = 6000;
-const MIN_DISPLAY_MS = 1800;
+const SAFETY_TIMEOUT = 4000;
+const MIN_DISPLAY_MS = 1400;
 const FADE_OUT_MS = 300;
 const BG_FADE_MS = 250;
 
 function pickSplashAnimation(family: ThemeFamily, isDark: boolean) {
   const key = `${family}-${isDark ? "dark" : "light"}` as keyof typeof splashAnimations;
-  return splashAnimations[key] ?? splashAnimations.production;
+  if (splashAnimations[key]) return splashAnimations[key];
+  // New families fall back to default dark/light animations
+  const fallback = isDark ? "default-dark" : "default-light";
+  return splashAnimations[fallback];
 }
 
 // Overlay = final visible bg after the dark layer fades out.
 // Should match the theme's background color for a seamless transition.
 function pickOverlayBg(family: ThemeFamily, isDark: boolean): string {
   if (family === "claude") return isDark ? "#171614" : "#FAF7F2";
+  // For new themes, use their actual background color from the palette
+  if (family === "catppuccin") return isDark ? "#1e1e2e" : "#eff1f5";
+  if (family === "dracula") return isDark ? "#282a36" : "#F8F8F2";
+  if (family === "tokyonight") return isDark ? "#1a1b26" : "#e1e2e7";
   return isDark ? "#1E1E1E" : "#FFFFFF";
 }
 
@@ -44,6 +52,9 @@ function pickOverlayBg(family: ThemeFamily, isDark: boolean): string {
 // Matches the dark-mode bg so the native→animated splash handoff is seamless.
 function pickDarkLayerBg(family: ThemeFamily): string {
   if (family === "claude") return "#171614";
+  if (family === "catppuccin") return "#1e1e2e";
+  if (family === "dracula") return "#282a36";
+  if (family === "tokyonight") return "#1a1b26";
   return "#1E1E1E";
 }
 
