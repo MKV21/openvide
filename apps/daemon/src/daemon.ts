@@ -5,6 +5,8 @@ import { daemonDir, log, logError } from "./utils.js";
 import { startServer, cleanupSocket } from "./ipc.js";
 import { tryCacheClaudeAuth } from "./authCache.js";
 import * as sm from "./sessionManager.js";
+import { startBridge, stopBridge, isBridgeRunning } from "./bridgeServer.js";
+import { initScheduler, stopScheduler } from "./scheduleManager.js";
 
 const PID_FILE = "daemon.pid";
 const LOG_FILE = "daemon.log";
@@ -234,6 +236,7 @@ export function runDaemonMain(): void {
 
   // Initialize session manager (loads state, marks interrupted)
   sm.init();
+  initScheduler();
 
   // Try to cache Claude auth credentials from Keychain.
   // Succeeds when daemon is started from a local GUI session (not SSH).
@@ -241,6 +244,17 @@ export function runDaemonMain(): void {
 
   // Start IPC server
   const server = startServer();
+
+  // Auto-start bridge if previously enabled
+  const daemonState = sm.getState();
+  if (daemonState.bridge?.enabled) {
+    log("Auto-starting bridge (previously enabled)...");
+    try {
+      startBridge(daemonState.bridge);
+    } catch (err) {
+      logError("Failed to auto-start bridge:", err instanceof Error ? err.message : String(err));
+    }
+  }
 
   // Heartbeat: touch PID file
   const heartbeat = setInterval(() => {
@@ -256,6 +270,11 @@ export function runDaemonMain(): void {
   const shutdown = async (signal: string) => {
     log(`Received ${signal}, shutting down...`);
     clearInterval(heartbeat);
+    stopScheduler();
+
+    if (isBridgeRunning()) {
+      await stopBridge();
+    }
 
     server.close();
     await sm.shutdownAll();

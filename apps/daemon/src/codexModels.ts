@@ -136,7 +136,7 @@ export async function listCodexModels(timeoutMs = 15000): Promise<CodexModelReco
         params: {
           clientInfo: {
             name: "openvide-daemon",
-            version: "0.1.7",
+            version: "0.2.0",
           },
           capabilities: {},
         },

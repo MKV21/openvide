@@ -9,7 +9,6 @@ function buildClaudeCommand(opts: BuildCommandOpts): string {
     "--verbose",
   ];
 
-  // Mode determines permission/tool flags
   if (opts.mode === "plan") {
     parts.push("--permission-mode", "plan", "--allow-dangerously-skip-permissions");
   } else if (opts.mode === "chat") {

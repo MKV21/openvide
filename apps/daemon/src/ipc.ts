@@ -1,12 +1,19 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as child_process from "node:child_process";
+import * as os from "node:os";
 import { daemonDir, log, logError } from "./utils.js";
 import * as sm from "./sessionManager.js";
-import type { IpcRequest, IpcResponse, Tool } from "./types.js";
+import type { IpcRequest, IpcResponse, Tool, BridgeConfig, BridgeConfigSnapshot } from "./types.js";
 import { listNativeSessionsForWorkspace, mergeWorkspaceSessions } from "./nativeHistory/index.js";
 import { readHistoryForDaemonSession, readHistoryForNativeSession } from "./historyStore.js";
 import { listCodexModels } from "./codexModels.js";
+import { generateSecret, createJwt, parseDuration } from "./jwt.js";
+import { startBridge, stopBridge, isBridgeRunning, getBridgeInfo, updateBridgeConfig, getLocalIp } from "./bridgeServer.js";
+import { encodeQR } from "./qrText.js";
+import * as tm from "./teamManager.js";
+import * as sched from "./scheduleManager.js";
 
 const SOCKET_NAME = "daemon.sock";
 
@@ -86,15 +93,56 @@ function respond(conn: net.Socket, res: IpcResponse): void {
   conn.end(JSON.stringify(res) + "\n");
 }
 
-async function routeCommand(req: IpcRequest): Promise<IpcResponse> {
+function snapshotBridgeConfig(config: BridgeConfig): BridgeConfigSnapshot {
+  return {
+    enabled: config.enabled === true,
+    port: typeof config.port === "number" ? config.port : 7842,
+    tls: config.tls !== false,
+    bindHost: config.bindHost?.trim() || "::",
+    defaultCwd: config.defaultCwd?.trim() || os.homedir(),
+    evenAiTool: config.evenAiTool === "codex" ? "codex" : "claude",
+    evenAiMode:
+      config.evenAiMode === "new" || config.evenAiMode === "pinned"
+        ? config.evenAiMode
+        : "last",
+    evenAiPinnedSessionId: config.evenAiPinnedSessionId ?? "",
+    currentEvenAiSessionId: config.currentEvenAiSessionId ?? "",
+  };
+}
+
+/** Check which CLI tools are installed on this host. */
+async function detectInstalledTools(): Promise<Record<string, boolean>> {
+  const tools = ["claude", "codex", "gemini"];
+  const results: Record<string, boolean> = {};
+  await Promise.all(
+    tools.map(async (tool) => {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          child_process.exec(`command -v ${tool}`, { timeout: 3000 }, (err) => {
+            err ? reject(err) : resolve();
+          });
+        });
+        results[tool] = true;
+      } catch {
+        results[tool] = false;
+      }
+    }),
+  );
+  return results;
+}
+
+export async function routeCommand(req: IpcRequest): Promise<IpcResponse> {
   switch (req.cmd) {
     case "health": {
       const sessions = sm.listSessions();
+      const tools = await detectInstalledTools();
       return {
         ok: true,
         pid: process.pid,
+        name: os.hostname(),
         activeSessions: sm.getActiveCount(),
         totalSessions: sessions.length,
+        tools,
       };
     }
 
@@ -243,9 +291,600 @@ async function routeCommand(req: IpcRequest): Promise<IpcResponse> {
       return { ok: true };
     }
 
+    // ── Bridge commands ──
+
+    case "bridge.enable": {
+      const state = sm.getState();
+      const port = typeof req.port === "number" ? req.port : 7842;
+      const tls = req.tls !== false; // default true
+      const bindHost = typeof req.bindHost === "string" && req.bindHost.trim()
+        ? req.bindHost.trim()
+        : undefined;
+
+      if (!state.bridge) {
+        const secret = generateSecret();
+        state.bridge = {
+          enabled: true,
+          port,
+          tls,
+          bindHost,
+          secretKey: secret.toString("hex"),
+          revokedTokens: [],
+        };
+      } else {
+        state.bridge.enabled = true;
+        state.bridge.port = port;
+        state.bridge.tls = tls;
+        if (bindHost) state.bridge.bindHost = bindHost;
+        if (!state.bridge.secretKey) {
+          state.bridge.secretKey = generateSecret().toString("hex");
+        }
+      }
+
+      sm.persist();
+      startBridge(state.bridge);
+      return { ok: true, bridgeStatus: getBridgeInfo() };
+    }
+
+    case "bridge.disable": {
+      if (isBridgeRunning()) {
+        await stopBridge();
+      }
+      const state = sm.getState();
+      if (state.bridge) {
+        state.bridge.enabled = false;
+        sm.persist();
+      }
+      return { ok: true };
+    }
+
+    case "bridge.status": {
+      return { ok: true, bridgeStatus: getBridgeInfo() };
+    }
+
+    case "bridge.token.create": {
+      const state = sm.getState();
+      if (!state.bridge?.secretKey) {
+        return { ok: false, error: "Bridge not configured. Run bridge.enable first." };
+      }
+      const expireStr = typeof req.expire === "string" ? req.expire : "24h";
+      let expireSeconds: number;
+      try {
+        expireSeconds = parseDuration(expireStr);
+      } catch {
+        return { ok: false, error: `Invalid expire duration: ${expireStr}` };
+      }
+      const { token } = createJwt(state.bridge.secretKey, {
+        expireSeconds,
+        extraClaims: { kind: "bootstrap" },
+      });
+      return {
+        ok: true,
+        bridgeToken: token,
+        bridgeUrl: `openvide://${getLocalIp()}:${state.bridge.port}?token=${token}`,
+      } as IpcResponse & { bridgeToken: string; bridgeUrl: string };
+    }
+
+    case "bridge.token.revoke": {
+      const jti = req.jti as string | undefined;
+      if (!jti) return { ok: false, error: "Missing required: jti" };
+      const state = sm.getState();
+      if (!state.bridge) {
+        return { ok: false, error: "Bridge not configured" };
+      }
+      if (!state.bridge.revokedTokens.includes(jti)) {
+        state.bridge.revokedTokens.push(jti);
+        sm.persist();
+        if (isBridgeRunning()) updateBridgeConfig(state.bridge);
+      }
+      return { ok: true };
+    }
+
+    case "bridge.qr": {
+      const state = sm.getState();
+      if (!state.bridge?.secretKey) {
+        return { ok: false, error: "Bridge not configured. Run bridge.enable first." };
+      }
+      const expStr = typeof req.expire === "string" ? req.expire : "24h";
+      let expSec: number;
+      try {
+        expSec = parseDuration(expStr);
+      } catch {
+        return { ok: false, error: `Invalid expire duration: ${expStr}` };
+      }
+      const { token } = createJwt(state.bridge.secretKey, {
+        expireSeconds: expSec,
+        extraClaims: { kind: "bootstrap" },
+      });
+      const host = typeof req.host === "string" ? req.host : getLocalIp();
+      const proto = state.bridge.tls ? "https" : "http";
+      const url = `${proto}://${host}:${state.bridge.port}?token=${token}`;
+      const qrLines = await encodeQR(url);
+      return { ok: true, bridgeToken: token, bridgeUrl: url, qrLines };
+    }
+
+    case "bridge.config": {
+      const state = sm.getState();
+      if (!state.bridge) {
+        return { ok: false, error: "Bridge not configured. Run bridge.enable first." };
+      }
+      let changed = false;
+      if (typeof req.defaultCwd === "string") {
+        state.bridge.defaultCwd = req.defaultCwd.trim() || undefined;
+        changed = true;
+      }
+      if (typeof req.bindHost === "string") {
+        state.bridge.bindHost = req.bindHost.trim() || undefined;
+        changed = true;
+      }
+      if (req.evenAiTool === "claude" || req.evenAiTool === "codex") {
+        state.bridge.evenAiTool = req.evenAiTool;
+        changed = true;
+      }
+      if (req.evenAiMode === "new" || req.evenAiMode === "last" || req.evenAiMode === "pinned") {
+        state.bridge.evenAiMode = req.evenAiMode;
+        changed = true;
+      }
+      if (typeof req.evenAiPinnedSessionId === "string") {
+        state.bridge.evenAiPinnedSessionId = req.evenAiPinnedSessionId;
+        changed = true;
+      }
+      if (typeof req.currentEvenAiSessionId === "string") {
+        state.bridge.currentEvenAiSessionId = req.currentEvenAiSessionId;
+        changed = true;
+      }
+      if (changed) {
+        sm.persist();
+        if (isBridgeRunning()) updateBridgeConfig(state.bridge);
+      }
+      return {
+        ok: true,
+        bridgeConfig: snapshotBridgeConfig(state.bridge),
+        bridgeStatus: getBridgeInfo(),
+      };
+    }
+
+    // ── Remote + Schedule commands ──
+
+    case "session.remote": {
+      const id = req.id as string | undefined;
+      if (!id) return { ok: false, error: "Missing required: id" };
+      const session = sm.getSession(id);
+      if (!session) return { ok: false, error: `Session ${id} not found` };
+      if (session.tool !== "claude") return { ok: false, error: "Remote control is only supported for Claude sessions" };
+      const dirName = session.workingDirectory.split("/").pop() ?? "session";
+      try {
+        const result = await spawnClaude(["remote-control", "--name", dirName], session.workingDirectory, 15000);
+        // Claude outputs a URL like "https://claude.ai/code/..." to stdout
+        const urlMatch = result.stdout.match(/https:\/\/claude\.ai\/[^\s]+/);
+        if (urlMatch) {
+          return { ok: true, remoteUrl: urlMatch[0] };
+        }
+        return { ok: false, error: result.stdout || result.stderr || "No remote URL returned" };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "schedule.list": {
+      return { ok: true, schedules: sched.listSchedules() };
+    }
+
+    case "schedule.get": {
+      const scheduleId = req.id as string | undefined;
+      if (!scheduleId) return { ok: false, error: "Missing required: id" };
+      const schedule = sched.getSchedule(scheduleId);
+      if (!schedule) return { ok: false, error: `Schedule ${scheduleId} not found` };
+      return { ok: true, schedule };
+    }
+
+    case "schedule.create": {
+      const name = req.name as string | undefined;
+      const schedule = req.schedule as string | undefined;
+      const target = req.target as import("./types.js").ScheduleTarget | undefined;
+      if (!name || !schedule || !target) {
+        return { ok: false, error: "Missing required: name, schedule, target" };
+      }
+      try {
+        const created = sched.createSchedule({
+          name,
+          schedule,
+          project: req.project as string | undefined,
+          enabled: typeof req.enabled === "boolean" ? req.enabled : undefined,
+          target,
+        });
+        return { ok: true, schedule: created };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "schedule.update": {
+      const scheduleId = req.id as string | undefined;
+      if (!scheduleId) return { ok: false, error: "Missing required: id" };
+      try {
+        const updated = sched.updateSchedule(scheduleId, {
+          name: req.name as string | undefined,
+          schedule: req.schedule as string | undefined,
+          project: req.project as string | undefined,
+          enabled: typeof req.enabled === "boolean" ? req.enabled : undefined,
+          target: req.target as import("./types.js").ScheduleTarget | undefined,
+        });
+        if (!updated) return { ok: false, error: `Schedule ${scheduleId} not found` };
+        return { ok: true, schedule: updated };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "schedule.delete": {
+      const scheduleId = (req.id as string | undefined) ?? (req.scheduleId as string | undefined);
+      if (!scheduleId) return { ok: false, error: "Missing required: id" };
+      const deleted = sched.deleteSchedule(scheduleId);
+      if (!deleted) return { ok: false, error: `Schedule ${scheduleId} not found` };
+      return { ok: true };
+    }
+
+    case "schedule.run": {
+      const taskId = req.taskId as string | undefined;
+      if (!taskId) return { ok: false, error: "Missing required: taskId" };
+      try {
+        const { schedule, session } = await sched.runSchedule(taskId, "manual");
+        return { ok: true, schedule, session };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    // ── Filesystem commands ──
+
+    case "fs.list": {
+      const dirPath = req.path as string | undefined;
+      if (!dirPath) return { ok: false, error: "Missing required: path" };
+      const resolved = dirPath.startsWith("~")
+        ? dirPath.replace("~", process.env.HOME ?? process.env.USERPROFILE ?? "")
+        : dirPath;
+      try {
+        const entries = fs.readdirSync(resolved, { withFileTypes: true });
+        const result = entries.map((e) => {
+          let size = 0;
+          let modifiedAt = "";
+          try {
+            const stat = fs.statSync(path.join(resolved, e.name));
+            size = stat.size;
+            modifiedAt = stat.mtime.toISOString();
+          } catch { /* ignore */ }
+          return {
+            name: e.name,
+            type: e.isDirectory() ? "dir" : "file",
+            size,
+            modifiedAt,
+          };
+        });
+        return { ok: true, entries: result };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "fs.read": {
+      const filePath = req.path as string | undefined;
+      if (!filePath) return { ok: false, error: "Missing required: path" };
+      const resolved = filePath.startsWith("~")
+        ? filePath.replace("~", process.env.HOME ?? process.env.USERPROFILE ?? "")
+        : filePath;
+      try {
+        const content = fs.readFileSync(resolved, "utf-8");
+        return { ok: true, fileContent: { content } };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    // ── Team commands ──
+
+    case "team.create": {
+      const name = req.name as string | undefined;
+      const cwd = req.cwd as string | undefined;
+      const members = req.members as Array<{ name: string; tool: string; model?: string; role: string }> | undefined;
+      if (!name || !cwd || !members || !Array.isArray(members)) {
+        return { ok: false, error: "Missing required: name, cwd, members" };
+      }
+      try {
+        const team = tm.createTeam(name, cwd, members as any[]);
+        return { ok: true, team };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "team.list": {
+      const teams = tm.listTeams().map((team) => {
+        const tasks = tm.listTasks(team.id);
+        const activeCount = team.members.reduce((count, member) => {
+          const session = sm.getSession(member.sessionId);
+          return count + (session?.status === "running" ? 1 : 0);
+        }, 0);
+        const latestPlan = tm.getLatestPlan(team.id);
+        return {
+          ...team,
+          taskCount: tasks.length,
+          tasksTotal: tasks.length,
+          tasksDone: tasks.filter((task) => task.status === "approved").length,
+          activeCount,
+          latestPlanId: latestPlan?.id,
+        };
+      });
+      return { ok: true, teams };
+    }
+
+    case "team.get": {
+      const teamId = req.teamId as string | undefined;
+      if (!teamId) return { ok: false, error: "Missing required: teamId" };
+      const team = tm.getTeam(teamId);
+      if (!team) return { ok: false, error: `Team ${teamId} not found` };
+      const tasks = tm.listTasks(team.id);
+      const latestPlan = tm.getLatestPlan(team.id);
+      const activeCount = team.members.reduce((count, member) => {
+        const session = sm.getSession(member.sessionId);
+        return count + (session?.status === "running" ? 1 : 0);
+      }, 0);
+      return {
+        ok: true,
+        team: {
+          ...team,
+          taskCount: tasks.length,
+          tasksTotal: tasks.length,
+          tasksDone: tasks.filter((task) => task.status === "approved").length,
+          activeCount,
+          latestPlanId: latestPlan?.id,
+        },
+      };
+    }
+
+    case "team.update": {
+      const teamId = req.teamId as string | undefined;
+      if (!teamId) return { ok: false, error: "Missing required: teamId" };
+      const team = tm.updateTeam(teamId, {
+        name: req.name as string | undefined,
+        workingDirectory: req.cwd as string | undefined,
+        members: req.members as Array<{ name: string; tool: Tool; model?: string; role: string }> | undefined,
+      });
+      if (!team) return { ok: false, error: `Team ${teamId} not found` };
+      return { ok: true, team };
+    }
+
+    case "team.delete": {
+      const teamId = req.teamId as string | undefined;
+      if (!teamId) return { ok: false, error: "Missing required: teamId" };
+      const deleted = tm.deleteTeam(teamId);
+      if (!deleted) return { ok: false, error: `Team ${teamId} not found` };
+      return { ok: true };
+    }
+
+    case "team.task.create": {
+      const teamId = req.teamId as string | undefined;
+      const subject = req.subject as string | undefined;
+      const description = req.description as string ?? "";
+      const owner = req.owner as string | undefined;
+      if (!teamId || !subject) {
+        return { ok: false, error: "Missing required: teamId, subject" };
+      }
+      try {
+        const task = tm.createTask(teamId, subject, description, owner ?? "", req.dependencies as string[] | undefined);
+        return { ok: true, teamTask: task };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "team.task.update": {
+      const teamId = req.teamId as string | undefined;
+      const taskId = req.taskId as string | undefined;
+      if (!teamId || !taskId) {
+        return { ok: false, error: "Missing required: teamId, taskId" };
+      }
+      const updates: Record<string, unknown> = {};
+      if (req.status) updates.status = req.status;
+      if (req.owner) updates.owner = req.owner;
+      if (req.description) updates.description = req.description;
+      const task = tm.updateTask(teamId, taskId, updates as any);
+      if (!task) return { ok: false, error: `Task ${taskId} not found` };
+      return { ok: true, teamTask: task };
+    }
+
+    case "team.task.list": {
+      const teamId = req.teamId as string | undefined;
+      if (!teamId) return { ok: false, error: "Missing required: teamId" };
+      return { ok: true, teamTasks: tm.listTasks(teamId) };
+    }
+
+    case "team.task.comment": {
+      const teamId = req.teamId as string | undefined;
+      const taskId = req.taskId as string | undefined;
+      const author = req.author as string ?? "user";
+      const text = req.text as string | undefined;
+      if (!teamId || !taskId || !text) {
+        return { ok: false, error: "Missing required: teamId, taskId, text" };
+      }
+      const comment = tm.addComment(teamId, taskId, author, text);
+      if (!comment) return { ok: false, error: `Task ${taskId} not found` };
+      return { ok: true };
+    }
+
+    case "team.message.send": {
+      const teamId = req.teamId as string | undefined;
+      const from = req.from as string ?? "user";
+      const to = req.to as string ?? "*";
+      const text = req.text as string | undefined;
+      if (!teamId || !text) {
+        return { ok: false, error: "Missing required: teamId, text" };
+      }
+      try {
+        tm.sendMessage(teamId, from, to, text);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "team.message.list": {
+      const teamId = req.teamId as string | undefined;
+      if (!teamId) return { ok: false, error: "Missing required: teamId" };
+      const limit = typeof req.limit === "number" ? req.limit : undefined;
+      return { ok: true, teamMessages: tm.listMessages(teamId, limit) };
+    }
+
+    case "team.plan.submit": {
+      const teamId = req.teamId as string | undefined;
+      const plan = req.plan as { tasks: any[] } | undefined;
+      const createdBy = req.createdBy as string ?? "user";
+      if (!teamId || !plan?.tasks) {
+        return { ok: false, error: "Missing required: teamId, plan.tasks" };
+      }
+      try {
+        const teamPlan = tm.submitPlan(teamId, plan.tasks, createdBy, {
+          mode: req.mode as any,
+          reviewers: req.reviewers as string[] | undefined,
+          maxIterations: typeof req.maxIterations === "number" ? req.maxIterations : undefined,
+        });
+        return { ok: true, teamPlan };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "team.plan.generate": {
+      const teamId = req.teamId as string | undefined;
+      const request = req.request as string | undefined;
+      if (!teamId || !request) {
+        return { ok: false, error: "Missing required: teamId, request" };
+      }
+      try {
+        tm.generatePlan(teamId, request, {
+          mode: req.mode as any,
+          reviewers: req.reviewers as string[] | undefined,
+          maxIterations: typeof req.maxIterations === "number" ? req.maxIterations : undefined,
+        });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case "team.plan.review": {
+      const teamId = req.teamId as string | undefined;
+      const planId = req.planId as string | undefined;
+      const vote = req.vote as "approve" | "revise" | "reject" | undefined;
+      const reviewer = req.reviewer as string | undefined;
+      if (!teamId || !planId || !vote || !reviewer) {
+        return { ok: false, error: "Missing required: teamId, planId, reviewer, vote" };
+      }
+      const plan = tm.reviewPlan(teamId, planId, reviewer, vote, req.feedback as string | undefined);
+      if (!plan) return { ok: false, error: `Plan ${planId} not found` };
+      return { ok: true, teamPlan: plan };
+    }
+
+    case "team.plan.revise": {
+      const teamId = req.teamId as string | undefined;
+      const planId = req.planId as string | undefined;
+      const revision = req.revision as { tasks: any[] } | undefined;
+      const author = req.author as string ?? "user";
+      if (!teamId || !planId || !revision?.tasks) {
+        return { ok: false, error: "Missing required: teamId, planId, revision.tasks" };
+      }
+      const plan = tm.revisePlan(teamId, planId, author, revision.tasks);
+      if (!plan) return { ok: false, error: `Plan ${planId} not found` };
+      return { ok: true, teamPlan: plan };
+    }
+
+    case "team.plan.get": {
+      const teamId = req.teamId as string | undefined;
+      const planId = req.planId as string | undefined;
+      if (!teamId || !planId) {
+        return { ok: false, error: "Missing required: teamId, planId" };
+      }
+      const plan = tm.getPlan(teamId, planId);
+      if (!plan) return { ok: false, error: `Plan ${planId} not found` };
+      return { ok: true, teamPlan: plan };
+    }
+
+    case "team.plan.latest": {
+      const teamId = req.teamId as string | undefined;
+      if (!teamId) {
+        return { ok: false, error: "Missing required: teamId" };
+      }
+      const plan = tm.getLatestPlan(teamId);
+      if (!plan) return { ok: true, teamPlan: undefined };
+      return { ok: true, teamPlan: plan };
+    }
+
+    case "team.plan.delete": {
+      const teamId = req.teamId as string | undefined;
+      const planId = req.planId as string | undefined;
+      if (!teamId || !planId) {
+        return { ok: false, error: "Missing required: teamId, planId" };
+      }
+      const deleted = tm.deletePlan(teamId, planId);
+      if (!deleted) return { ok: false, error: `Plan ${planId} not found` };
+      return { ok: true };
+    }
+
     default:
       return { ok: false, error: `Unknown command: ${req.cmd}` };
   }
+}
+
+// ── Claude CLI helpers ──
+
+function spawnClaude(
+  args: string[],
+  cwd?: string,
+  timeoutMs = 15000,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+    const extraDirs = [
+      `${home}/.local/bin`,
+      `${home}/.npm-global/bin`,
+      `${home}/.cargo/bin`,
+      `${home}/.bun/bin`,
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+    ];
+    const currentPath = process.env.PATH ?? "/usr/bin:/bin";
+
+    const child = child_process.spawn("claude", args, {
+      cwd: cwd ?? home,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        PATH: [...extraDirs, currentPath].join(":"),
+      },
+    });
+    child.stdin?.end();
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("Claude command timed out"));
+    }, timeoutMs);
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode: code ?? 1 });
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
 }
 
 // ── Client (runs in CLI process) ──

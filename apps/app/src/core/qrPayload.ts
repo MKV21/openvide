@@ -6,6 +6,14 @@ export interface QrConnectionPayload {
   username?: string;
 }
 
+export interface BridgeQrPayload {
+  v: 2;
+  type: "bridge";
+  url: string;
+  token: string;
+  label?: string;
+}
+
 // ed25519 PKCS#8 DER prefix (16 bytes, fixed for all ed25519 keys)
 const ED25519_PKCS8_PREFIX = "MC4CAQAwBQYDK2VwBCIEIA==";
 // The prefix base64 decodes to the 16-byte header; we slice off the
@@ -37,9 +45,20 @@ function seedToPem(seedBase64: string): string {
   return `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----\n`;
 }
 
-export function decodeQrPayload(raw: string): QrConnectionPayload | null {
+export function decodeQrPayload(raw: string): QrConnectionPayload | BridgeQrPayload | null {
   try {
     const obj = JSON.parse(raw) as Record<string, unknown>;
+
+    // v2 bridge payload
+    if (obj.v === 2 && obj.type === "bridge") {
+      const url = obj.url as string | undefined;
+      const token = obj.token as string | undefined;
+      if (typeof url !== "string" || url.length === 0) return null;
+      if (typeof token !== "string" || token.length === 0) return null;
+      const label = typeof obj.label === "string" && obj.label.length > 0 ? obj.label : undefined;
+      return { v: 2, type: "bridge", url, token, label };
+    }
+
     if (obj.v !== 1) return null;
 
     // Compact format: { v, h, p, u, k } where k is base64 seed

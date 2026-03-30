@@ -43,11 +43,9 @@ export async function checkForUpdateOnLaunch(
         }
         onStatus?.("downloading");
         await Updates.fetchUpdateAsync();
-        // Only reload if we haven't timed out — otherwise the app is already
-        // past the splash and reloading would cause a white flash.
-        if (!timedOut) {
-          await Updates.reloadAsync();
-        }
+        // Update is downloaded — it will apply on next cold start.
+        // Don't call reloadAsync() here: it restarts the JS bundle which
+        // re-mounts the splash animation, causing it to play twice.
       })(),
       new Promise<void>((resolve) =>
         setTimeout(() => {

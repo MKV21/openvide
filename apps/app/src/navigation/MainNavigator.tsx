@@ -17,13 +17,17 @@ import { PortBrowserScreen } from "../screens/PortBrowserScreen";
 import { WebPreviewScreen } from "../screens/WebPreviewScreen";
 import { FileEditorScreen } from "../screens/FileEditorScreen";
 import { SessionDiffsScreen } from "../screens/SessionDiffsScreen";
+import { SchedulesScreen } from "../screens/SchedulesScreen";
+import { TeamListScreen } from "../screens/TeamListScreen";
+import { TeamDetailScreen } from "../screens/TeamDetailScreen";
+import { TeamChatScreen } from "../screens/TeamChatScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { HamburgerButton } from "../components/HamburgerButton";
 import { useThemeColors } from "../constants/colors";
 
 const Stack = createNativeStackNavigator<MainStackParamList>();
 
-const ROOT_SCREENS = new Set(["WorkspaceList", "Hosts", "Settings"]);
+const ROOT_SCREENS = new Set(["WorkspaceList", "Hosts", "Settings", "TeamList"]);
 
 export function MainNavigator(): JSX.Element {
   const { headerBg, foreground, background } = useThemeColors();
@@ -132,6 +136,29 @@ export function MainNavigator(): JSX.Element {
         name="SessionDiffs"
         component={SessionDiffsScreen}
         options={{ title: "Diffs" }}
+      />
+      <Stack.Screen
+        name="Schedules"
+        component={SchedulesScreen}
+        options={{ title: "Schedules" }}
+      />
+      <Stack.Screen
+        name="TeamList"
+        component={TeamListScreen}
+        options={{
+          title: "Teams",
+          headerLeft: () => <HamburgerButton />,
+        }}
+      />
+      <Stack.Screen
+        name="TeamDetail"
+        component={TeamDetailScreen}
+        options={{ title: "Team", headerBackButtonDisplayMode: "minimal" }}
+      />
+      <Stack.Screen
+        name="TeamChat"
+        component={TeamChatScreen}
+        options={{ title: "Team Chat", headerBackButtonDisplayMode: "minimal" }}
       />
     </Stack.Navigator>
   );

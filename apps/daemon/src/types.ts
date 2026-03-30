@@ -21,6 +21,11 @@ export interface SessionRecord {
   id: string;
   tool: Tool;
   status: SessionStatus;
+  runKind?: "interactive" | "scheduled" | "team";
+  scheduleId?: string;
+  scheduleName?: string;
+  teamId?: string;
+  teamName?: string;
   pendingRemoval?: boolean;
   conversationId?: string;
   workingDirectory: string;
@@ -61,6 +66,11 @@ export interface WorkspaceSessionRecord {
   origin: "daemon" | "native";
   tool: "claude" | "codex";
   status: SessionStatus;
+  runKind?: "interactive" | "scheduled" | "team";
+  scheduleId?: string;
+  scheduleName?: string;
+  teamId?: string;
+  teamName?: string;
   workingDirectory: string;
   resumeId: string;
   conversationId?: string;
@@ -77,10 +87,51 @@ export interface WorkspaceSessionRecord {
   lastTurn?: LastTurn;
 }
 
+export interface BridgeConfig {
+  enabled: boolean;
+  port: number;
+  tls: boolean;
+  bindHost?: string;              // bind interface for the embedded bridge (default: ::)
+  secretKey: string;              // hex-encoded 32-byte HMAC secret
+  revokedTokens: string[];        // revoked JTI strings
+  clientSessions?: Record<string, BridgeClientSession>;
+  defaultCwd?: string;            // working dir for Even AI sessions (default: $HOME)
+  evenAiTool?: "claude" | "codex";  // tool for Even AI (default: "claude")
+  evenAiMode?: "new" | "last" | "pinned";  // session routing mode (default: "last")
+  evenAiPinnedSessionId?: string;  // session ID for pinned mode
+  currentEvenAiSessionId?: string; // last-used session ID (for "last" mode)
+}
+
+export interface BridgeConfigSnapshot {
+  enabled: boolean;
+  port: number;
+  tls: boolean;
+  bindHost: string;
+  defaultCwd: string;
+  evenAiTool: "claude" | "codex";
+  evenAiMode: "new" | "last" | "pinned";
+  evenAiPinnedSessionId: string;
+  currentEvenAiSessionId: string;
+}
+
+export interface BridgeClientSession {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  refreshExpiresAt: string;
+  refreshTokenHash: string;
+  userAgent?: string;
+  lastSeenAt?: string;
+  lastIp?: string;
+}
+
 export interface DaemonState {
   version: 1;
   sessions: Record<string, SessionRecord>;
   pushToken?: string;
+  bridge?: BridgeConfig;
+  teams?: Record<string, TeamConfig>;
+  schedules?: Record<string, ScheduledTask>;
 }
 
 // ── Output JSONL ──
@@ -115,6 +166,40 @@ export interface IpcRequest {
   [key: string]: unknown;
 }
 
+export interface PromptScheduleTarget {
+  kind: "prompt";
+  tool: Tool;
+  cwd: string;
+  prompt: string;
+  model?: string;
+  mode?: string;
+}
+
+export interface TeamScheduleTarget {
+  kind: "team";
+  teamId: string;
+  prompt: string;
+  to?: string;
+}
+
+export type ScheduleTarget = PromptScheduleTarget | TeamScheduleTarget;
+
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  schedule: string;
+  project?: string;
+  enabled: boolean;
+  target: ScheduleTarget;
+  createdAt: string;
+  updatedAt: string;
+  lastRun?: string;
+  lastStatus?: "idle" | "running" | "success" | "failed";
+  lastError?: string;
+  nextRun?: string;
+  lastSessionId?: string;
+}
+
 export interface IpcResponse {
   ok: boolean;
   error?: string;
@@ -127,10 +212,28 @@ export interface IpcResponse {
     isDefault: boolean;
   }>;
   history?: SessionHistoryPayload;
+  entries?: Array<{ name: string; type: string; size: number; modifiedAt: string }>;
+  fileContent?: { content: string };
+  remoteUrl?: string;
+  schedules?: ScheduledTask[];
+  schedule?: ScheduledTask;
+  team?: TeamConfig;
+  teams?: TeamConfig[];
+  teamTasks?: TeamTask[];
+  teamTask?: TeamTask;
+  teamMessages?: TeamMessage[];
+  teamPlan?: TeamPlan;
   timedOut?: boolean;
   pid?: number;
+  name?: string;
   activeSessions?: number;
   totalSessions?: number;
+  tools?: Record<string, boolean>;
+  bridgeUrl?: string;
+  bridgeToken?: string;
+  bridgeStatus?: { enabled: boolean; port: number; tls: boolean; bindHost: string; connections: number };
+  bridgeConfig?: BridgeConfigSnapshot;
+  qrLines?: string[];
 }
 
 // ── Normalized Events & Snapshots ──
@@ -195,6 +298,99 @@ export interface SessionEventRecord {
   prompt?: string;
   exitCode?: number;
   cliEvent?: NormalizedCliEvent;
+}
+
+// ── Agent Teams ──
+
+export type AgentRole = "lead" | "coder" | "reviewer" | "planner";
+
+export interface TeamMember {
+  name: string;
+  tool: Tool;
+  model?: string;
+  role: AgentRole;
+  sessionId: string;
+}
+
+export type TaskStatus = "todo" | "in_progress" | "done" | "review" | "approved";
+
+export interface TeamTask {
+  id: string;
+  teamId: string;
+  subject: string;
+  description: string;
+  owner: string;
+  status: TaskStatus;
+  dependencies: string[];
+  blockedBy: string[];
+  comments: TaskComment[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskComment {
+  id: string;
+  author: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface TeamMessage {
+  id: string;
+  teamId: string;
+  from: string;
+  fromTool?: Tool;
+  to: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface TeamConfig {
+  id: string;
+  name: string;
+  workingDirectory: string;
+  members: TeamMember[];
+  taskCount?: number;
+  tasksTotal?: number;
+  tasksDone?: number;
+  activeCount?: number;
+  latestPlanId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlanRevision {
+  id: string;
+  author: string;
+  tasks: { subject: string; description: string; owner: string; dependencies?: string[] }[];
+  feedback?: string;
+  createdAt: string;
+}
+
+export interface PlanReviewVote {
+  reviewer: string;
+  vote: "approve" | "revise" | "reject";
+  feedback?: string;
+  iteration: number;
+  createdAt: string;
+}
+
+export type PlanMode = "simple" | "consensus";
+
+export interface TeamPlan {
+  id: string;
+  teamId: string;
+  revisions: PlanRevision[];
+  votes: PlanReviewVote[];
+  status: "draft" | "review" | "revision" | "approved" | "rejected" | "auto-approved";
+  mode: PlanMode;
+  createdBy: string;
+  reviewers: string[];
+  currentReviewer?: string;
+  iteration: number;
+  maxIterations: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ── Command Builder ──

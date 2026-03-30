@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { PersistedState } from "../core/types";
 
 const STORAGE_KEY = "open-vide/state";
-const CURRENT_VERSION = 6;
+const CURRENT_VERSION = 7;
 
 const EMPTY_STATE: PersistedState = {
   version: CURRENT_VERSION,
@@ -66,6 +66,19 @@ function migrate(state: Record<string, unknown>): PersistedState {
   // v5 → v6: add session.mode (optional field, no migration needed)
   if (version < 6) {
     state["version"] = 6;
+  }
+
+  // v6 → v7: add connectionType to TargetProfile (default "ssh" for existing hosts)
+  if (version < 7) {
+    const targets = state["targets"];
+    if (Array.isArray(targets)) {
+      for (const t of targets) {
+        if (t && typeof t === "object" && !(t as Record<string, unknown>).connectionType) {
+          (t as Record<string, unknown>).connectionType = "ssh";
+        }
+      }
+    }
+    state["version"] = 7;
   }
 
   return {

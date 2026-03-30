@@ -1,5 +1,5 @@
 import type { NavigatorScreenParams } from "@react-navigation/native";
-import type { QrConnectionPayload } from "../core/qrPayload";
+import type { QrConnectionPayload, BridgeQrPayload } from "../core/qrPayload";
 
 export type MainStackParamList = {
   // Root screens (sidebar sections)
@@ -19,12 +19,16 @@ export type MainStackParamList = {
   WebPreview: { targetId: string; url: string; title?: string };
   FileEditor: { targetId: string; filePath: string };
   SessionDiffs: { targetId: string; workingDirectory: string };
+  Schedules: undefined;
+  TeamList: undefined;
+  TeamDetail: { teamId: string };
+  TeamChat: { teamId: string };
 };
 
 export type ModalStackParamList = {
   NewSessionSheet: { selectedDirectory?: string } | undefined;
   CreateWorkspaceSheet: { selectedDirectory?: string; selectedTargetId?: string; nameValue?: string; nameEdited?: boolean } | undefined;
-  AddHostSheet: { qrPayload?: QrConnectionPayload } | undefined;
+  AddHostSheet: { qrPayload?: QrConnectionPayload; bridgeQrPayload?: BridgeQrPayload } | undefined;
   QrScannerSheet: undefined;
   DirectoryPicker: { targetId: string; currentPath?: string; returnTo?: "NewSessionSheet" | "CreateWorkspaceSheet"; returnState?: Record<string, unknown> };
   PromptLibrarySheet: undefined;

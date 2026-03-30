@@ -114,8 +114,14 @@ export function spawnTurn(
   }
 
   const spawnCommand = (cmd: string, usedConversationId: string | undefined): void => {
+    // Expand ~ to home directory — Node spawn doesn't do shell expansion
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+    const resolvedCwd = session.workingDirectory.startsWith("~")
+      ? session.workingDirectory.replace("~", home)
+      : session.workingDirectory;
+
     child = child_process.spawn("sh", ["-c", cmd], {
-      cwd: session.workingDirectory,
+      cwd: resolvedCwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: augmentedEnv(authEnv),
     });

@@ -13,7 +13,8 @@ import type {
 import { getContextWindow, getDefaultModel } from "../modelOptions";
 import { getAdapter } from "./adapterRegistry";
 import type { CliStreamEvent } from "./adapterTypes";
-import { DaemonTransport, type DaemonOutputLine } from "./DaemonTransport";
+import type { DaemonTransport, DaemonOutputLine } from "./DaemonTransport";
+import type { Transport } from "./Transport";
 import { isRequestUserInputToolName, shouldAutoCompleteToolUse } from "./planMode";
 import { splitMultiFileDiff } from "../diffParser";
 
@@ -24,7 +25,7 @@ function cloneSession(session: AiSession): AiSession {
 }
 
 export class SessionEngine {
-  private readonly transport: DaemonTransport;
+  private readonly transport: Transport;
   private readonly persist: (session: AiSession) => Promise<void>;
   private readonly sessions = new Map<string, AiSession>();
   private readonly listeners = new Map<string, Set<SessionListener>>();
@@ -40,7 +41,7 @@ export class SessionEngine {
   private static readonly NOTIFY_THROTTLE_MS = 100;
 
   constructor(
-    transport: DaemonTransport,
+    transport: Transport,
     persist: (session: AiSession) => Promise<void>,
   ) {
     this.transport = transport;
@@ -913,9 +914,10 @@ export class SessionEngine {
       // Timestamp marker for Codex post-turn diff: touch a temp file before the turn,
       // then after the turn use `find -newer` to discover files modified during the turn.
       // Works for tracked + untracked files alike.
-      if (session.tool === "codex" && session.workingDirectory) {
+      // Only available via SSH transport (DaemonTransport has runSshCommand).
+      if (session.tool === "codex" && session.workingDirectory && "runSshCommand" in this.transport) {
         try {
-          await this.transport.runSshCommand(target, credentials, `touch '${markerFile}'`);
+          await (this.transport as DaemonTransport).runSshCommand(target, credentials, `touch '${markerFile}'`);
           hasMarker = true;
         } catch {
           // Non-critical
@@ -1045,8 +1047,9 @@ export class SessionEngine {
         // Fetch git diffs for Codex turns — only files modified during this turn.
         // Writes diff output to a temp file on the remote (avoids PTY noise corrupting
         // the diff text in stdout), then reads it back with cat.
-        if (session.tool === "codex" && session.workingDirectory && hasMarker) {
+        if (session.tool === "codex" && session.workingDirectory && hasMarker && "runSshCommand" in this.transport) {
           try {
+            const sshTransport = this.transport as DaemonTransport;
             const wd = session.workingDirectory.replace(/'/g, "'\\''");
             const diffFile = `/tmp/.ov-diff-${session.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
@@ -1067,11 +1070,11 @@ export class SessionEngine {
               ` fi;` +
               ` done > '${diffFile}' 2>/dev/null`;
 
-            await this.transport.runSshCommand(target, credentials, genCmd, 20000);
+            await sshTransport.runSshCommand(target, credentials, genCmd, 20000);
 
             // Step 2: Read the diff file — find first "diff --git" to skip
             // the command echo, then splitMultiFileDiff strips trailing PTY noise
-            const catResult = await this.transport.runSshCommand(target, credentials,
+            const catResult = await sshTransport.runSshCommand(target, credentials,
               `cat '${diffFile}' 2>/dev/null`);
             const diffStart = catResult.stdout.indexOf("diff --git ");
             const rawDiff = diffStart >= 0 ? catResult.stdout.slice(diffStart).trim() : "";
@@ -1163,9 +1166,9 @@ export class SessionEngine {
     }
 
     // Clean up Codex temp files regardless of success/failure
-    if (hasMarker) {
+    if (hasMarker && "runSshCommand" in this.transport) {
       const diffFile = `/tmp/.ov-diff-${session.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
-      this.transport.runSshCommand(target, credentials, `rm -f '${markerFile}' '${diffFile}'`)
+      (this.transport as DaemonTransport).runSshCommand(target, credentials, `rm -f '${markerFile}' '${diffFile}'`)
         .catch(() => {});
     }
 

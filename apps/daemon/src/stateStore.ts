@@ -25,12 +25,12 @@ export function loadState(): DaemonState {
 
 export function saveState(state: DaemonState): void {
   const p = statePath();
-  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
 
   const suffix = `${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
   const tmp = `${p}.${suffix}.tmp`;
   const payload = JSON.stringify(state, null, 2) + "\n";
-  const fd = fs.openSync(tmp, "w");
+  const fd = fs.openSync(tmp, "w", 0o600);
   try {
     fs.writeSync(fd, payload, undefined, "utf-8");
     fs.fsyncSync(fd);
@@ -40,6 +40,7 @@ export function saveState(state: DaemonState): void {
 
   try {
     fs.renameSync(tmp, p);
+    fs.chmodSync(p, 0o600);
   } catch (err) {
     try { fs.unlinkSync(tmp); } catch { /* ignore */ }
     throw err;
