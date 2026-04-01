@@ -1,94 +1,103 @@
 /**
- * Web Speech API wrapper for voice prompt input.
- *
- * Provides start/stop/onResult/onError lifecycle for SpeechRecognition.
- * The G2 mic is used via the WebView's standard media access.
+ * Voice input using even-toolkit STTEngine with supported cloud providers only.
  */
 
 import type { Store } from '../state/store';
 
-let recognition: any = null;
+let engine: any = null;
 let activeStore: Store | null = null;
+let committedTranscript = '';
+let interimTranscript = '';
 
-/** Check if Web Speech API exists in this environment. */
-export function isVoiceAvailable(): boolean {
-  return !!(
-    (window as any).SpeechRecognition ||
-    (window as any).webkitSpeechRecognition
-  );
+function normalizeProvider(provider?: string | null): 'whisper-api' | 'deepgram' {
+  return provider === 'deepgram' ? 'deepgram' : 'whisper-api';
 }
 
-export function startVoiceCapture(store: Store): void {
-  if (recognition) {
+function normalizeTranscriptText(text?: string | null): string {
+  return (text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function mergeTranscript(base: string, next: string): string {
+  const normalizedBase = normalizeTranscriptText(base);
+  const normalizedNext = normalizeTranscriptText(next);
+
+  if (!normalizedBase) return normalizedNext;
+  if (!normalizedNext) return normalizedBase;
+  if (normalizedNext.startsWith(normalizedBase)) return normalizedNext;
+  if (normalizedBase.endsWith(normalizedNext)) return normalizedBase;
+  return `${normalizedBase} ${normalizedNext}`.trim();
+}
+
+/** Check if voice is available (always true — STTEngine handles provider availability). */
+export function isVoiceAvailable(): boolean {
+  return true;
+}
+
+export async function startVoiceCapture(store: Store): Promise<void> {
+  if (engine) {
     stopVoiceCapture();
   }
 
-  const SpeechRecognition =
-    (window as any).SpeechRecognition ||
-    (window as any).webkitSpeechRecognition;
+  activeStore = store;
+  committedTranscript = '';
+  interimTranscript = '';
+  const settings = store.getState().settings;
+  const provider = normalizeProvider(settings.sttProvider);
+  const apiKey = settings.sttApiKey?.trim();
 
-  if (!SpeechRecognition) {
-    console.error('[voice] SpeechRecognition not available');
-    store.dispatch({ type: 'VOICE_ERROR', error: 'Speech not available' });
+  store.dispatch({ type: 'VOICE_START' });
+
+  if (!apiKey) {
+    store.dispatch({ type: 'VOICE_ERROR', error: `${provider} API key missing` });
     return;
   }
 
-  activeStore = store;
-  recognition = new SpeechRecognition();
-  recognition.continuous = false;
-  recognition.interimResults = true;
-  recognition.lang = 'en-US';
+  try {
+    const { STTEngine } = await import('even-toolkit/stt');
 
-  recognition.onresult = (event: any) => {
-    let interim = '';
-    let final = '';
+    engine = new STTEngine({
+      provider,
+      source: 'microphone',
+      language: settings.voiceLang ?? 'en-US',
+      apiKey,
+    });
 
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) {
-        final += transcript;
+    engine.onTranscript((t: { text: string; isFinal: boolean }) => {
+      if (!activeStore) return;
+      const nextText = normalizeTranscriptText(t.text);
+      if (t.isFinal) {
+        committedTranscript = mergeTranscript(committedTranscript, nextText);
+        interimTranscript = '';
+        activeStore.dispatch({ type: 'VOICE_FINAL', text: committedTranscript });
       } else {
-        interim += transcript;
+        interimTranscript = nextText;
+        activeStore.dispatch({
+          type: 'VOICE_INTERIM',
+          text: mergeTranscript(committedTranscript, interimTranscript),
+        });
       }
-    }
+    });
 
-    if (final) {
-      store.dispatch({ type: 'VOICE_FINAL', text: final.trim() });
-    } else if (interim) {
-      store.dispatch({ type: 'VOICE_INTERIM', text: interim.trim() });
-    }
-  };
+    engine.onError((err: { message: string }) => {
+      activeStore?.dispatch({ type: 'VOICE_ERROR', error: err.message });
+    });
 
-  recognition.onerror = (event: any) => {
-    console.error('[voice] Recognition error:', event.error);
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-      console.warn('[voice] Permission denied');
-      store.dispatch({ type: 'VOICE_ERROR', error: 'not-allowed' });
-    } else if (event.error === 'no-speech' || event.error === 'aborted') {
-      store.dispatch({ type: 'VOICE_ERROR', error: 'No speech detected' });
-    } else {
-      store.dispatch({ type: 'VOICE_ERROR', error: event.error });
-    }
-  };
-
-  recognition.onend = () => {
-    console.log('[voice] Recognition ended');
-    recognition = null;
-  };
-
-  console.log('[voice] Starting recognition');
-  store.dispatch({ type: 'VOICE_START' });
-  recognition.start();
+    await engine.start();
+  } catch (error) {
+    engine = null;
+    activeStore?.dispatch({
+      type: 'VOICE_ERROR',
+      error: error instanceof Error ? error.message : 'Failed to start speech-to-text',
+    });
+  }
 }
 
 export function stopVoiceCapture(): void {
-  if (recognition) {
-    try {
-      recognition.abort();
-    } catch {
-      // Already stopped
-    }
-    recognition = null;
+  if (engine) {
+    try { engine.stop(); } catch { /* ignore */ }
+    engine = null;
   }
   activeStore = null;
+  committedTranscript = '';
+  interimTranscript = '';
 }

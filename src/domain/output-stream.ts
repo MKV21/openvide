@@ -1,22 +1,19 @@
 /**
- * SSE/fetch streaming client for live session output.
+ * Live session output stream via WebSocket subscription.
+ * Replaces SSE/EventSource with the unified WS connection.
  * Parses raw JSONL from Claude/Codex into human-readable lines.
  */
 
 import type { Store } from '../state/store';
-import { getStreamUrl } from './daemon-client';
+import { subscribe } from './daemon-client';
 import { parseOutputLine } from './output-parser';
 
-let activeSource: EventSource | null = null;
+let unsubscribeFn: (() => void) | null = null;
 
 export function startOutputStream(store: Store, sessionId: string): void {
   stopOutputStream();
 
-  const url = getStreamUrl(sessionId);
-  console.log('[output-stream] Connecting to', url);
-
-  const source = new EventSource(url);
-  activeSource = source;
+  console.log('[output-stream] Subscribing to session', sessionId);
 
   // Coalesce renders: batch lines arriving within 100ms
   let pending: string[] = [];
@@ -39,21 +36,16 @@ export function startOutputStream(store: Store, sessionId: string): void {
     }
   }
 
-  source.onmessage = (event) => {
-    // Parse the raw JSONL into human-readable lines
-    const readable = parseOutputLine(event.data);
+  unsubscribeFn = subscribe(sessionId, (rawLine: string) => {
+    const readable = parseOutputLine(rawLine);
     enqueue(readable);
-  };
-
-  source.onerror = () => {
-    console.warn('[output-stream] Connection error, will retry');
-  };
+  });
 }
 
 export function stopOutputStream(): void {
-  if (activeSource) {
-    activeSource.close();
-    activeSource = null;
+  if (unsubscribeFn) {
+    unsubscribeFn();
+    unsubscribeFn = null;
     console.log('[output-stream] Stopped');
   }
 }

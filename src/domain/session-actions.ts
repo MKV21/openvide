@@ -57,6 +57,24 @@ export async function cancelSession(store: Store, sessionId: string): Promise<vo
   }
 }
 
+export async function pushToChannel(store: Store, sessionId: string, content: string, meta?: Record<string, unknown>): Promise<void> {
+  try {
+    const res = await rpc('channel.push', { sessionId, content, meta });
+    if (!res.ok) {
+      store.dispatch({
+        type: 'ACTION_COMPLETED',
+        result: { action: 'channel.push', sessionId, success: false, message: (res.error as string) ?? 'Push failed' },
+      });
+    }
+    // No success notification — the text is injected silently
+  } catch (err: any) {
+    store.dispatch({
+      type: 'ACTION_COMPLETED',
+      result: { action: 'channel.push', sessionId, success: false, message: err?.message ?? 'Push failed' },
+    });
+  }
+}
+
 export async function dismissSession(store: Store, sessionId: string): Promise<void> {
   store.dispatch({ type: 'ACTION_STARTED', action: 'dismiss', sessionId });
   try {

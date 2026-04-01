@@ -3,6 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -13,7 +14,11 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@evenrealities/even_hub_sdk": ["./node_modules/@evenrealities/even_hub_sdk"],
+      "@jappyjan/even-better-sdk": ["./node_modules/@jappyjan/even-better-sdk"],
+      "react": ["./node_modules/@types/react"],
+      "react-router": ["./node_modules/react-router"]
     }
   },
   "include": ["src"]

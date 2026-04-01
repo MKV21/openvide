@@ -134,9 +134,10 @@ function parseAssistantMessage(message: any): string[] {
     } else if (block.type === 'thinking' && block.thinking) {
       const id = thinkingCounter++;
       const thinkLines = splitIntoLines(block.thinking);
-      // First line as summary for the header
+      // Short preview for the collapsed header
       const summary = thinkLines[0] ?? 'Thinking...';
       lines.push(`${THINK_HEADER}${id}§${summary}`);
+      // Body lines skip the first (already shown as header summary)
       for (let i = 1; i < thinkLines.length; i++) {
         lines.push(`${THINK_BODY}${id}§${thinkLines[i]}`);
       }
@@ -144,11 +145,33 @@ function parseAssistantMessage(message: any): string[] {
       const name = block.name ?? 'tool';
       const input = block.input;
       let detail = '';
-      if (input?.file_path) detail = ` ${input.file_path}`;
+      if (input?.question) detail = ` ${input.question}`;
+      else if (input?.file_path) detail = ` ${input.file_path}`;
       else if (input?.command) detail = ` ${input.command}`;
       else if (input?.pattern) detail = ` ${input.pattern}`;
       else if (input?.query) detail = ` ${input.query}`;
-      lines.push(`>> ${name}${detail}`);
+      else if (input?.text) detail = ` ${input.text}`;
+      else if (input?.content) detail = ` ${typeof input.content === 'string' ? input.content : ''}`;
+
+      // For AskUserQuestion, show the question as regular text instead of tool call
+      if (name === 'AskUserQuestion') {
+        const questionText = input?.question ?? input?.message ?? input?.prompt ?? input?.text ?? '';
+        if (questionText) {
+          lines.push(...splitIntoLines(questionText));
+        } else if (typeof input === 'object' && input) {
+          // Try to extract any string value from input
+          const vals = Object.values(input).filter((v): v is string => typeof v === 'string');
+          if (vals.length > 0) {
+            lines.push(...splitIntoLines(vals.join('\n')));
+          } else {
+            lines.push(`>> ${name}`);
+          }
+        } else {
+          lines.push(`>> ${name}`);
+        }
+      } else {
+        lines.push(`>> ${name}${detail}`);
+      }
     }
   }
 
@@ -175,6 +198,20 @@ function parseCodexItem(item: any): string[] {
   return [];
 }
 
+/** Strip markdown formatting for plain-text display. */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')   // **bold**
+    .replace(/\*(.+?)\*/g, '$1')        // *italic*
+    .replace(/__(.+?)__/g, '$1')        // __bold__
+    .replace(/_(.+?)_/g, '$1')          // _italic_
+    .replace(/`(.+?)`/g, '$1')          // `code`
+    .replace(/^#{1,6}\s+/, '')          // # headings
+    .replace(/^\s*[-*]\s+/, '- ')       // bullet lists → uniform dash
+    .replace(/^\s*\d+\.\s+/, '')        // numbered lists → strip number
+    .trim();
+}
+
 function splitIntoLines(text: string): string[] {
-  return text.split('\n').map((l) => l.trim()).filter(Boolean);
+  return text.split('\n').map((l) => stripMarkdown(l.trim())).filter(Boolean);
 }

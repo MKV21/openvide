@@ -10,6 +10,12 @@
 import type { Store } from '../state/store';
 import type { Action } from '../state/actions';
 
+const SCROLLABLE_SCREENS = [
+  'home', 'host-list', 'workspace-list', 'session-list', 'session-detail',
+  'live-output', 'file-browser', 'file-viewer',
+  'session-diffs', 'settings', 'prompt-select', 'port-browser',
+];
+
 export function bindKeyboard(store: Store, handleAction: (action: Action) => void): void {
   document.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -23,12 +29,17 @@ export function bindKeyboard(store: Store, handleAction: (action: Action) => voi
         e.preventDefault();
         switch (state.screen) {
           case 'home':
-            if (state.sessions.length > 0) handleAction({ type: 'NAVIGATE', screen: 'session-list' });
+            handleAction({ type: 'PRIMARY_ACTION' });
             break;
+          case 'host-list':
+          case 'workspace-list':
           case 'session-list':
+          case 'file-browser':
+          case 'prompt-select':
             handleAction({ type: 'SELECT_HIGHLIGHTED' });
             break;
           case 'session-detail':
+          case 'settings':
             handleAction({ type: 'PRIMARY_ACTION' });
             break;
           case 'action-result':
@@ -46,14 +57,14 @@ export function bindKeyboard(store: Store, handleAction: (action: Action) => voi
 
       case 'ArrowUp':
         e.preventDefault();
-        if (state.screen === 'session-list' || state.screen === 'session-detail' || state.screen === 'live-output') {
+        if (SCROLLABLE_SCREENS.includes(state.screen)) {
           handleAction({ type: 'HIGHLIGHT_MOVE', direction: 'up' });
         }
         break;
 
       case 'ArrowDown':
         e.preventDefault();
-        if (state.screen === 'session-list' || state.screen === 'session-detail' || state.screen === 'live-output') {
+        if (SCROLLABLE_SCREENS.includes(state.screen)) {
           handleAction({ type: 'HIGHLIGHT_MOVE', direction: 'down' });
         }
         break;

@@ -77,10 +77,103 @@ export interface WorkspaceSessionRecord {
   lastTurn?: LastTurn;
 }
 
+// ── Settings ──
+
+export interface DaemonSettings {
+  language: string;
+  voiceLang: string;
+  showToolDetails: boolean;
+  pollInterval: number;
+  showHiddenFiles: boolean;
+  sttProvider: "whisper-api" | "deepgram";
+  sttApiKey: string;
+}
+
+// ── Prompts ──
+
+export interface PromptRecord {
+  id: string;
+  label: string;
+  prompt: string;
+  isBuiltIn: boolean;
+}
+
+// ── Diffs ──
+
+export interface DiffFileRecord {
+  path: string;
+  added: number;
+  removed: number;
+  isNew: boolean;
+}
+
+// ── Ports ──
+
+export interface PortEntryRecord {
+  port: number;
+  process: string;
+  pid: number;
+  address: string;
+}
+
+// ── Teams ──
+
+export interface TeamMember {
+  name: string;
+  tool: Tool;
+  role: 'lead' | 'coder' | 'reviewer' | 'planner';
+  sessionId?: string;
+}
+
+export interface TeamRecord {
+  id: string;
+  name: string;
+  members: TeamMember[];
+  workingDirectory?: string;
+  createdAt: string;
+}
+
+export interface TeamTaskRecord {
+  id: string;
+  teamId: string;
+  subject: string;
+  description?: string;
+  owner?: string;
+  ownerTool?: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface TeamMessageRecord {
+  from: string;
+  fromTool?: string;
+  to: string;
+  text: string;
+  createdAt: string;
+  sessionId?: string;
+}
+
+// ── Schedules ──
+
+export interface ScheduleRecord {
+  id: string;
+  name: string;
+  schedule: string;
+  project?: string;
+  lastRun?: string;
+  lastStatus?: string;
+}
+
 export interface DaemonState {
   version: 1;
   sessions: Record<string, SessionRecord>;
   pushToken?: string;
+  settings?: DaemonSettings;
+  prompts?: PromptRecord[];
+  teams?: TeamRecord[];
+  teamTasks?: TeamTaskRecord[];
+  teamMessages?: TeamMessageRecord[];
+  schedules?: ScheduleRecord[];
 }
 
 // ── Output JSONL ──
@@ -108,6 +201,29 @@ export interface OutputLineMeta {
 
 export type OutputLine = OutputLineStdout | OutputLineStderr | OutputLineMeta;
 
+// ── File System ──
+
+export interface FsEntry {
+  name: string;
+  type: 'file' | 'dir';
+  size: number;
+  modifiedAt: string;
+}
+
+export interface FsReadResult {
+  content: string;
+  totalLines: number;
+  truncated: boolean;
+}
+
+export interface FsStatResult {
+  name: string;
+  type: 'file' | 'dir';
+  size: number;
+  modifiedAt: string;
+  permissions: string;
+}
+
 // ── IPC ──
 
 export interface IpcRequest {
@@ -127,10 +243,46 @@ export interface IpcResponse {
     isDefault: boolean;
   }>;
   history?: SessionHistoryPayload;
+  entries?: FsEntry[];
+  fileContent?: FsReadResult;
+  stat?: FsStatResult;
   timedOut?: boolean;
   pid?: number;
   activeSessions?: number;
   totalSessions?: number;
+  // Settings
+  settings?: DaemonSettings;
+  // Prompts
+  prompts?: PromptRecord[];
+  prompt?: PromptRecord;
+  // Diffs
+  files?: DiffFileRecord[];
+  // Ports
+  ports?: PortEntryRecord[];
+  // Diff file content
+  content?: string;
+  // Bridge QR
+  url?: string;
+  // Teams
+  teams?: Array<{
+    id: string;
+    name: string;
+    members: TeamMember[];
+    workingDirectory?: string;
+    createdAt: string;
+    memberCount: number;
+    taskCount: number;
+    activeCount: number;
+    tasksDone: number;
+    tasksTotal: number;
+  }>;
+  team?: TeamRecord;
+  teamTasks?: TeamTaskRecord[];
+  teamMessages?: TeamMessageRecord[];
+  task?: TeamTaskRecord;
+  // Schedules
+  schedules?: ScheduleRecord[];
+  schedule?: ScheduleRecord;
 }
 
 // ── Normalized Events & Snapshots ──

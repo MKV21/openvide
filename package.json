@@ -1,21 +1,38 @@
 {
   "name": "open-vide-g2",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "sed -i '' 's/borderRdaius/borderRadius/g' node_modules/@jappyjan/even-better-sdk/dist/index.js 2>/dev/null || true",
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "dev:web": "vite --port 3000 --open",
+    "dev:web": "vite --port 5173 --open /web.html",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@evenrealities/even_hub_sdk": "^0.0.7",
-    "@jappyjan/even-better-sdk": "*"
+    "@evenrealities/even_hub_sdk": "^0.0.9",
+    "@jappyjan/even-better-sdk": ">=0.0.11",
+    "@tanstack/react-query": "^5.90.21",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "even-toolkit": "^1.5.6",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router": "^7.13.1",
+    "tailwind-merge": "^3.5.0",
+    "upng-js": "^2.1.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/upng-js": "^2",
+    "@vitejs/plugin-react": "^4",
+    "tailwindcss": "^4.2.1",
     "typescript": "^5.4.0",
-    "vite": "^5.4.0"
+    "vite": "^6"
   },
   "packageManager": "yarn@4.12.0+sha512.f45ab632439a67f8bc759bf32ead036a1f413287b9042726b7cc4818b7b49e14e9423ba49b18f9e06ea4941c1ad062385b1d8760a8d5091a1a31e5f6219afca8"
 }

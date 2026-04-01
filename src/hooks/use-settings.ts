@@ -1,0 +1,135 @@
+import { useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { rpc } from '@/domain/daemon-client';
+import type { WebSettings } from '../types';
+import { useBridge } from '../contexts/bridge';
+import {
+  SETTINGS_CACHE_KEY,
+  SETTINGS_PENDING_KEY,
+  readStoredSettings,
+  readStoredSettingsSnapshot,
+  writeStoredSettings,
+  clearStoredSettings,
+} from '../lib/settings-storage';
+
+let settingsWriteChain: Promise<WebSettings | null> = Promise.resolve(null);
+
+export const defaultSettings: WebSettings = {
+  language: 'en',
+  voiceLang: 'en-US',
+  showToolDetails: true,
+  pollInterval: 2500,
+  showHiddenFiles: false,
+  sttProvider: 'whisper-api',
+  sttApiKey: '',
+};
+
+function normalizeSttProvider(provider?: string | null): WebSettings['sttProvider'] {
+  return provider === 'deepgram' ? 'deepgram' : 'whisper-api';
+}
+
+export function normalizeSettings(settings?: Partial<WebSettings> | null): WebSettings {
+  const merged = { ...defaultSettings, ...(settings ?? {}) };
+  return {
+    ...merged,
+    sttProvider: normalizeSttProvider(settings?.sttProvider ?? merged.sttProvider),
+  };
+}
+
+function getLocalSettingsFallback(): WebSettings {
+  return readStoredSettingsSnapshot(SETTINGS_PENDING_KEY, normalizeSettings)
+    ?? readStoredSettingsSnapshot(SETTINGS_CACHE_KEY, normalizeSettings)
+    ?? defaultSettings;
+}
+
+function queueSettingsPersist(
+  ensureBridgeForCommand: () => void,
+  settings: WebSettings,
+): Promise<WebSettings | null> {
+  settingsWriteChain = settingsWriteChain
+    .catch(() => null)
+    .then(async () => {
+      ensureBridgeForCommand();
+      const res = await rpc('settings.set', { settings });
+      if (!res.ok || !res.settings) {
+        throw new Error(typeof res.error === 'string' ? res.error : 'Unable to persist settings');
+      }
+      return normalizeSettings(res.settings as Partial<WebSettings>);
+    });
+
+  return settingsWriteChain.catch(() => null);
+}
+
+export function useSettings() {
+  const queryClient = useQueryClient();
+  const { ensureBridgeForCommand, connectionStatus } = useBridge();
+
+  const query = useQuery<WebSettings>({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const local = getLocalSettingsFallback();
+      try {
+        ensureBridgeForCommand();
+        const res = await rpc('settings.get');
+        if (res.ok && res.settings) {
+          const remote = normalizeSettings(res.settings as Partial<WebSettings>);
+          const pending = await readStoredSettings(SETTINGS_PENDING_KEY, normalizeSettings);
+          const merged = pending ? normalizeSettings({ ...remote, ...pending }) : remote;
+          await writeStoredSettings(SETTINGS_CACHE_KEY, merged);
+          return merged;
+        }
+      } catch { /* ignore */ }
+      return await readStoredSettings(SETTINGS_PENDING_KEY, normalizeSettings)
+        ?? await readStoredSettings(SETTINGS_CACHE_KEY, normalizeSettings)
+        ?? local;
+    },
+    staleTime: 30000,
+    initialData: getLocalSettingsFallback,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const pending = await readStoredSettings(SETTINGS_PENDING_KEY, normalizeSettings);
+      if (!pending || cancelled) return;
+      const current = normalizeSettings(queryClient.getQueryData<WebSettings>(['settings']) ?? pending);
+      const desired = normalizeSettings({ ...current, ...pending });
+      const persisted = await queueSettingsPersist(ensureBridgeForCommand, desired);
+      if (!cancelled && persisted) {
+        await writeStoredSettings(SETTINGS_CACHE_KEY, persisted);
+        clearStoredSettings(SETTINGS_PENDING_KEY);
+        queryClient.setQueryData(['settings'], persisted);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionStatus, ensureBridgeForCommand, queryClient]);
+
+  return query;
+}
+
+export function useUpdateSetting() {
+  const queryClient = useQueryClient();
+  const { ensureBridgeForCommand } = useBridge();
+
+  return useMutation({
+    mutationFn: async ({ key, value }: { key: keyof WebSettings; value: any }) => {
+      const current = normalizeSettings(queryClient.getQueryData<WebSettings>(['settings']) ?? getLocalSettingsFallback());
+      const updated = normalizeSettings({ ...current, [key]: value });
+      queryClient.setQueryData(['settings'], updated);
+      await writeStoredSettings(SETTINGS_CACHE_KEY, updated);
+      await writeStoredSettings(SETTINGS_PENDING_KEY, updated);
+
+      const persisted = await queueSettingsPersist(ensureBridgeForCommand, updated);
+      if (persisted) {
+        await writeStoredSettings(SETTINGS_CACHE_KEY, persisted);
+        clearStoredSettings(SETTINGS_PENDING_KEY);
+        queryClient.setQueryData(['settings'], persisted);
+      }
+
+      return persisted ?? updated;
+    },
+  });
+}

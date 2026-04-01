@@ -28,6 +28,9 @@ Usage:
   openvide-daemon session wait-idle --id <id> [--timeout-ms <n>]
   openvide-daemon session remove --id <id>
   openvide-daemon model list --tool <codex>
+  openvide-daemon fs list --path <path>
+  openvide-daemon fs read --path <path> [--offset <n>] [--limit <n>]
+  openvide-daemon fs stat --path <path>
   openvide-daemon config set-push-token --token <token>
   openvide-daemon keygen [--comment <c>] [--host <h>] [--port <p>] [--username <u>]
   openvide-daemon stop`);
@@ -160,6 +163,50 @@ async function main(): Promise<void> {
 
       default:
         failJson(`Unknown config subcommand: ${sub}`);
+    }
+  }
+
+  // ── fs subcommands ──
+  if (command === "fs") {
+    const sub = args[1];
+    if (!sub) failJson("Missing fs subcommand");
+
+    const flags = parseArgs(args.slice(2));
+
+    switch (sub) {
+      case "list": {
+        const fsPath = flags.get("path");
+        if (!fsPath) failJson("--path is required");
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "fs.list", path: fsPath });
+        printJson(res);
+        return;
+      }
+
+      case "read": {
+        const fsPath = flags.get("path");
+        if (!fsPath) failJson("--path is required");
+        const offsetRaw = flags.get("offset");
+        const limitRaw = flags.get("limit");
+        const offset = offsetRaw ? parseInt(offsetRaw, 10) : undefined;
+        const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "fs.read", path: fsPath, offset, limit });
+        printJson(res);
+        return;
+      }
+
+      case "stat": {
+        const fsPath = flags.get("path");
+        if (!fsPath) failJson("--path is required");
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "fs.stat", path: fsPath });
+        printJson(res);
+        return;
+      }
+
+      default:
+        failJson(`Unknown fs subcommand: ${sub}`);
     }
   }
 

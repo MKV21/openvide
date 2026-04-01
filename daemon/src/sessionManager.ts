@@ -1,9 +1,17 @@
+import { homedir } from "node:os";
 import { loadState, saveState } from "./stateStore.js";
 import { ensureSessionDir, removeSessionDir } from "./outputStore.js";
 import { spawnTurn, patchCodexSessionSource, type RunningProcess } from "./processRunner.js";
 import { sendPushNotification } from "./pushNotify.js";
 import { newId, nowISO, log, logError } from "./utils.js";
 import type { DaemonState, SessionRecord, SessionStatus, Tool, IpcResponse } from "./types.js";
+
+/** Expand ~ to the user's home directory. */
+function expandHome(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return homedir() + p.slice(1);
+  return p;
+}
 
 const runningProcesses = new Map<string, RunningProcess>();
 let state: DaemonState = { version: 1, sessions: {} };
@@ -67,11 +75,12 @@ export function createSession(
   const id = newId("ses");
   const now = nowISO();
 
+  const resolvedCwd = expandHome(workingDirectory);
   const session: SessionRecord = {
     id,
     tool,
     status: "idle",
-    workingDirectory,
+    workingDirectory: resolvedCwd,
     model,
     autoAccept,
     conversationId,
