@@ -3,10 +3,10 @@
  *
  * Mirrors the even-kitchen approach:
  * - AES-GCM encryption with a non-extractable key stored in IndexedDB
- * - ciphertext persisted in localStorage
+ * - ciphertext persisted in bridge-backed app storage
  * - graceful migration from older plaintext values
  *
- * This protects secrets at rest from casual localStorage inspection.
+ * This protects secrets at rest from casual app-storage inspection.
  * It does not protect against same-origin JavaScript execution.
  */
 

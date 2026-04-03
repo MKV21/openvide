@@ -86,7 +86,7 @@ export function BridgeProbeRoute() {
     // Dump ALL window keys for reference
     const allCustomKeys = Object.keys(win).filter(k => {
       // Skip standard browser globals
-      return !['location', 'document', 'navigator', 'screen', 'history', 'localStorage',
+      return !['location', 'document', 'navigator', 'screen', 'history',
                'sessionStorage', 'console', 'performance', 'crypto', 'fetch', 'alert',
                'confirm', 'prompt', 'close', 'open', 'print', 'name', 'length',
                'frames', 'self', 'top', 'parent', 'opener', 'window',
