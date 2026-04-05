@@ -14,6 +14,9 @@ export default defineConfig({
     },
     dedupe: ['react', 'react-dom', 'react-router', '@evenrealities/even_hub_sdk', '@jappyjan/even-better-sdk', 'upng-js', 'even-toolkit'],
   },
+  optimizeDeps: {
+    exclude: ['even-toolkit'],
+  },
   server: {
     host: '0.0.0.0',
     port: 5173,

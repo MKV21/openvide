@@ -9,7 +9,10 @@ let activeStore: Store | null = null;
 let committedTranscript = '';
 let interimTranscript = '';
 
-function normalizeProvider(_provider?: string | null): 'soniox' {
+const VALID_PROVIDERS = ['soniox', 'whisper-api', 'deepgram'] as const;
+
+function normalizeProvider(provider?: string | null): string {
+  if (provider && (VALID_PROVIDERS as readonly string[]).includes(provider)) return provider;
   return 'soniox';
 }
 

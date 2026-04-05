@@ -75,8 +75,11 @@ export interface WebSettings {
   showToolDetails: boolean;
   pollInterval: number;
   showHiddenFiles: boolean;
-  sttProvider: 'soniox';
+  sttProvider: 'soniox' | 'whisper-api' | 'deepgram';
   sttApiKey: string;
+  sttApiKeySoniox: string;
+  sttApiKeyWhisper: string;
+  sttApiKeyDeepgram: string;
 }
 
 export interface WebBridgeConfig {

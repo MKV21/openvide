@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
-import { useSTT } from 'even-toolkit/stt/react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import { useBridge } from '../contexts/bridge';
@@ -45,70 +44,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function STTTestSection({ apiKey, language }: { apiKey: string; language: string }) {
-  const [testing, setTesting] = useState(false);
-  const { transcript, interimTranscript, isListening, isLoading, error, state, start, stop, reset } = useSTT({
-    provider: 'soniox',
-    language,
-    apiKey,
-  });
-
-  const handleToggle = useCallback(async () => {
-    if (isListening) {
-      stop();
-      setTesting(false);
-    } else {
-      reset();
-      setTesting(true);
-      await start();
-    }
-  }, [isListening, start, stop, reset]);
-
-  if (!apiKey) return null;
-
-  return (
-    <div className="py-3 border-t border-border">
-      <div className="flex items-center justify-between mb-2">
-        <div>
-          <span className="text-[13px] tracking-[-0.13px] text-text font-normal">Test STT</span>
-          <p className="text-[11px] tracking-[-0.11px] text-text-dim mt-0.5">
-            {state === 'idle' && !testing ? 'Tap to test voice recognition' :
-             state === 'loading' || isLoading ? 'Connecting...' :
-             isListening ? 'Listening — speak now' :
-             state === 'processing' ? 'Processing...' :
-             'Done'}
-          </p>
-        </div>
-        <Button
-          size="sm"
-          variant={isListening ? 'danger' : 'default'}
-          onClick={handleToggle}
-          disabled={isLoading || state === 'processing'}
-        >
-          {isListening ? 'Stop' : testing ? 'Restart' : 'Test'}
-        </Button>
-      </div>
-      {isListening && (
-        <div className="flex items-center gap-2 mb-2">
-          <div className="w-2 h-2 rounded-full bg-negative animate-pulse shrink-0" />
-          <span className="text-[11px] tracking-[-0.11px] text-negative font-normal">Recording</span>
-        </div>
-      )}
-      {(interimTranscript || transcript) && (
-        <div className="rounded-[6px] bg-bg p-3 mt-1">
-          <p className="text-[13px] tracking-[-0.13px] text-text font-normal whitespace-pre-wrap">
-            {interimTranscript || transcript || '...'}
-          </p>
-        </div>
-      )}
-      {error && (
-        <p className="text-[11px] tracking-[-0.11px] text-negative mt-1.5 font-normal">
-          {error.message}
-        </p>
-      )}
-    </div>
-  );
-}
 
 export function SettingsRoute() {
   const navigate = useNavigate();
@@ -227,19 +162,48 @@ export function SettingsRoute() {
             />
           </SettingRow>
           <SettingRow label="STT Engine" description="Speech-to-text provider for voice input">
-            <span className="text-[13px] tracking-[-0.13px] text-text font-normal">Soniox</span>
+            <Select
+              value={settings?.sttProvider ?? 'soniox'}
+              options={[
+                { value: 'soniox', label: 'Soniox' },
+                { value: 'whisper-api', label: 'Whisper API' },
+                { value: 'deepgram', label: 'Deepgram' },
+              ]}
+              onValueChange={(v) => {
+                updateSetting.mutate({ key: 'sttProvider', value: v });
+                const keyMap: Record<string, string> = {
+                  soniox: settings?.sttApiKeySoniox ?? '',
+                  'whisper-api': settings?.sttApiKeyWhisper ?? '',
+                  deepgram: settings?.sttApiKeyDeepgram ?? '',
+                };
+                updateSetting.mutate({ key: 'sttApiKey', value: keyMap[v] ?? '' });
+              }}
+              className="w-[130px]"
+            />
           </SettingRow>
           <div className="py-3">
-            <span className="text-[11px] tracking-[-0.11px] text-text-dim font-normal">Soniox API Key</span>
+            <span className="text-[11px] tracking-[-0.11px] text-text-dim font-normal">
+              {settings?.sttProvider === 'whisper-api' ? 'OpenAI API Key' : settings?.sttProvider === 'deepgram' ? 'Deepgram API Key' : 'Soniox API Key'}
+            </span>
             <Input
               type="password"
-              value={settings?.sttApiKey ?? ''}
-              onChange={(e) => updateSetting.mutate({ key: 'sttApiKey' as any, value: e.target.value })}
-              placeholder="Enter Soniox API key"
+              value={settings?.sttProvider === 'whisper-api' ? (settings?.sttApiKeyWhisper ?? '') : settings?.sttProvider === 'deepgram' ? (settings?.sttApiKeyDeepgram ?? '') : (settings?.sttApiKeySoniox ?? '')}
+              onChange={(e) => {
+                const v = e.target.value;
+                const providerKeyMap: Record<string, keyof import('../types').WebSettings> = {
+                  soniox: 'sttApiKeySoniox',
+                  'whisper-api': 'sttApiKeyWhisper',
+                  deepgram: 'sttApiKeyDeepgram',
+                };
+                const key = providerKeyMap[settings?.sttProvider ?? 'soniox'] ?? 'sttApiKeySoniox';
+                updateSetting.mutate({ key, value: v });
+                updateSetting.mutate({ key: 'sttApiKey', value: v });
+              }}
+              placeholder={`Enter ${settings?.sttProvider === 'whisper-api' ? 'OpenAI' : settings?.sttProvider === 'deepgram' ? 'Deepgram' : 'Soniox'} API key`}
               className="mt-1"
             />
           </div>
-          <STTTestSection apiKey={settings?.sttApiKey ?? ''} language={settings?.voiceLang ?? 'en-US'} />
+
         </Card>
 
         {/* Even AI bridge */}

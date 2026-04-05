@@ -23,9 +23,17 @@ export const defaultSettings: WebSettings = {
   showHiddenFiles: false,
   sttProvider: 'soniox',
   sttApiKey: '',
+  sttApiKeySoniox: '',
+  sttApiKeyWhisper: '',
+  sttApiKeyDeepgram: '',
 };
 
-function normalizeSttProvider(_provider?: string | null): WebSettings['sttProvider'] {
+const VALID_STT_PROVIDERS: WebSettings['sttProvider'][] = ['soniox', 'whisper-api', 'deepgram'];
+
+function normalizeSttProvider(provider?: string | null): WebSettings['sttProvider'] {
+  if (provider && VALID_STT_PROVIDERS.includes(provider as WebSettings['sttProvider'])) {
+    return provider as WebSettings['sttProvider'];
+  }
   return 'soniox';
 }
 
