@@ -11,6 +11,8 @@ import { AppState, type AppStateStatus } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { newId } from "../core/id";
 import { DaemonTransport, type SessionHistoryPayload, type WorkspaceChatInfo } from "../core/ai/DaemonTransport";
+import { BridgeTransport } from "../core/ai/BridgeTransport";
+import type { Transport } from "../core/ai/Transport";
 import { parseSessionHistory } from "../core/ai/historyParser";
 import { deriveHydratedSessionStatus } from "../core/ai/planMode";
 import { SessionEngine } from "../core/ai/SessionEngine";
@@ -138,6 +140,11 @@ function basename(path: string): string {
 }
 
 function isWorkspaceHostEligible(target: TargetProfile): { eligible: boolean; reason?: string } {
+  // Bridge hosts are always eligible — tools are managed by the bridge server
+  if (target.connectionType === "bridge") {
+    return { eligible: true };
+  }
+
   const daemon = evaluateDaemonCompatibility(target.daemonInstalled === true, target.daemonVersion);
   if (!daemon.compatible) {
     return { eligible: false, reason: daemon.reason ?? "Daemon is not ready on this host." };
@@ -159,6 +166,8 @@ function isTerminal(status: RunRecord["status"]): boolean {
 }
 
 function assertDaemonCompatible(target: TargetProfile): void {
+  // Bridge hosts don't use the daemon — skip compatibility check
+  if (target.connectionType === "bridge") return;
   if (target.daemonCompatible === true) return;
 
   if (target.daemonCompatible === false) {
@@ -193,6 +202,8 @@ interface AppStoreContextShape {
     tags: string[];
     authMethod: AuthMethod;
     credentials: SshCredentials;
+    connectionType?: "ssh" | "bridge";
+    bridgeUrl?: string;
   }) => Promise<TargetProfile>;
   updateTarget: (
     targetId: string,
@@ -285,6 +296,33 @@ interface AppStoreContextShape {
   detachFromSession: (sessionId: string) => void;
   ensureSessionAttached: (sessionId: string) => void;
   refreshSessionHistory: (sessionId: string) => Promise<void>;
+  getRemoteUrl: (sessionId: string) => Promise<string>;
+  getSchedules: () => Promise<import("../core/ai/Transport").ScheduledTask[]>;
+  getSchedule: (scheduleId: string) => Promise<import("../core/ai/Transport").ScheduledTask>;
+  createSchedule: (targetId: string, schedule: import("../core/ai/Transport").ScheduleDraft) => Promise<import("../core/ai/Transport").ScheduledTask>;
+  updateSchedule: (scheduleId: string, updates: Partial<import("../core/ai/Transport").ScheduleDraft>, targetHint?: string) => Promise<import("../core/ai/Transport").ScheduledTask>;
+  deleteSchedule: (scheduleId: string, targetHint?: string) => Promise<void>;
+  runSchedule: (taskId: string) => Promise<void>;
+  getBridgeConfig: (targetId: string) => Promise<import("../core/ai/Transport").BridgeRuntimeConfig>;
+  updateBridgeConfig: (targetId: string, updates: Partial<import("../core/ai/Transport").BridgeRuntimeConfig>) => Promise<import("../core/ai/Transport").BridgeRuntimeConfig>;
+  getTeams: () => Promise<import("../core/ai/Transport").TeamInfo[]>;
+  getTeam: (teamId: string) => Promise<import("../core/ai/Transport").TeamInfo>;
+  createTeam: (opts: { targetId?: string; name: string; cwd: string; members: import("../core/ai/Transport").TeamMemberInput[] }) => Promise<import("../core/ai/Transport").TeamInfo>;
+  updateTeam: (teamId: string, updates: { name?: string; cwd?: string; members?: import("../core/ai/Transport").TeamMemberInput[] }) => Promise<import("../core/ai/Transport").TeamInfo>;
+  deleteTeam: (teamId: string) => Promise<void>;
+  getTeamTasks: (teamId: string) => Promise<import("../core/ai/Transport").TeamTaskInfo[]>;
+  createTeamTask: (teamId: string, task: { subject: string; description: string; owner: string; dependencies?: string[] }) => Promise<import("../core/ai/Transport").TeamTaskInfo>;
+  updateTeamTask: (teamId: string, taskId: string, updates: { status?: string; owner?: string }) => Promise<import("../core/ai/Transport").TeamTaskInfo>;
+  addTeamTaskComment: (teamId: string, taskId: string, text: string) => Promise<void>;
+  sendTeamMessage: (teamId: string, to: string, text: string) => Promise<void>;
+  getTeamMessages: (teamId: string, limit?: number) => Promise<import("../core/ai/Transport").TeamMessageInfo[]>;
+  generateTeamPlan: (teamId: string, request: string, opts?: import("../core/ai/Transport").TeamPlanSubmitOpts) => Promise<void>;
+  submitTeamPlan: (teamId: string, plan: import("../core/ai/Transport").TeamPlanInput, opts?: import("../core/ai/Transport").TeamPlanSubmitOpts) => Promise<import("../core/ai/Transport").TeamPlanInfo>;
+  reviewTeamPlan: (teamId: string, planId: string, vote: "approve" | "revise" | "reject", feedback?: string) => Promise<import("../core/ai/Transport").TeamPlanInfo>;
+  reviseTeamPlan: (teamId: string, planId: string, revision: import("../core/ai/Transport").TeamPlanInput) => Promise<import("../core/ai/Transport").TeamPlanInfo>;
+  getTeamPlan: (teamId: string, planId: string) => Promise<import("../core/ai/Transport").TeamPlanInfo>;
+  getLatestTeamPlan: (teamId: string) => Promise<import("../core/ai/Transport").TeamPlanInfo | null>;
+  deleteTeamPlan: (teamId: string, planId: string) => Promise<void>;
 }
 
 const AppStoreContext = createContext<AppStoreContextShape | null>(null);
@@ -327,6 +365,13 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
     transportRef.current = new DaemonTransport(sshRef.current);
   }
 
+  const bridgeTransportRef = useRef<BridgeTransport>(new BridgeTransport());
+
+  function getTransport(target: TargetProfile): Transport {
+    if (target.connectionType === "bridge") return bridgeTransportRef.current;
+    return transportRef.current!;
+  }
+
   const sessionEngineRef = useRef<SessionEngine | null>(null);
   if (!sessionEngineRef.current) {
     sessionEngineRef.current = new SessionEngine(transportRef.current, async (session) => {
@@ -357,6 +402,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
         // Clear push token registrations so they're re-sent after SSH reconnection
         pushTokenRegisteredTargets.current.clear();
         pendingPushTargets.current.clear();
+        bridgeTransportRef.current.resetAllConnections().catch(() => {});
         transportRef.current?.resetAllConnections().then(() => {
           // Re-attach to any running sessions whose SSH stream was killed
           for (const session of stateRef.current.sessions) {
@@ -413,7 +459,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
             if (!pushTokenRegisteredTargets.current.has(targetId)) {
               pushTokenRegisteredTargets.current.add(targetId);
               __DEV__ && console.log(`[OV:push] Flushing pending registration for target ${targetId.slice(0, 12)}`);
-              void transportRef.current?.registerPushToken(target, credentials, token);
+              void getTransport(target).registerPushToken(target, credentials, token);
             }
           }
           pendingPushTargets.current.clear();
@@ -548,6 +594,8 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
     tags: string[];
     authMethod: AuthMethod;
     credentials: SshCredentials;
+    connectionType?: "ssh" | "bridge";
+    bridgeUrl?: string;
   }): Promise<TargetProfile> => {
     const now = new Date().toISOString();
     const target: TargetProfile = {
@@ -556,6 +604,8 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
       host: input.host,
       port: input.port,
       username: input.username,
+      connectionType: input.connectionType,
+      bridgeUrl: input.bridgeUrl,
       tags: input.tags,
       authMethod: input.authMethod,
       lastStatus: "unknown",
@@ -598,7 +648,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
     try {
       const credentials = await loadTargetCredentials(target.id);
       if (!credentials) return;
-      await transportRef.current!.removeSession(target, credentials, session.daemonSessionId);
+      await getTransport(target).removeSession(target, credentials, session.daemonSessionId);
     } catch {
     }
   }, []);
@@ -930,7 +980,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
     const credentials = await loadTargetCredentials(target.id);
     if (!credentials) throw new Error("Target credentials are missing from secure store");
 
-    const allSessions = await transportRef.current!.listWorkspaceSessions(
+    const allSessions = await getTransport(target).listWorkspaceSessions(
       target,
       credentials,
       workspace.directory,
@@ -1019,7 +1069,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
       let parsed = undefined as ReturnType<typeof parseSessionHistory> | undefined;
 
       if (workspaceChat.origin === "daemon" && workspaceChat.daemonSessionId) {
-        const daemonHistory = await transportRef.current!.getHistory(
+        const daemonHistory = await getTransport(target).getHistory(
           target,
           credentials,
           {
@@ -1033,7 +1083,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
         // Prefer native history when available so opening a daemon-linked chat
         // still loads the full CLI resume history from disk.
         try {
-          const nativeHistory = await transportRef.current!.getHistory(
+          const nativeHistory = await getTransport(target).getHistory(
             target,
             credentials,
             {
@@ -1051,7 +1101,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
           // Native resume history may not exist for daemon-only turns.
         }
       } else {
-        const history = await transportRef.current!.getHistory(
+        const history = await getTransport(target).getHistory(
           target,
           credentials,
           {
@@ -1170,7 +1220,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
     }
     pushTokenRegisteredTargets.current.add(target.id);
     __DEV__ && console.log(`[OV:push] Registering push token with target ${target.id.slice(0, 12)}`);
-    void transportRef.current?.registerPushToken(target, credentials, token);
+    void getTransport(target).registerPushToken(target, credentials, token);
   }, []);
 
   const startAiSession = useCallback(async (input: {
@@ -1248,7 +1298,12 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
   const deleteSession = useCallback(async (sessionId: string): Promise<void> => {
     const session = stateRef.current.sessions.find((s) => s.id === sessionId);
     if (session) {
-      void tryRemoveDaemonSession(session);
+      // Await daemon removal so the session doesn't reappear on next refresh
+      try {
+        await tryRemoveDaemonSession(session);
+      } catch {
+        // Continue with local removal even if daemon fails
+      }
     }
     await sessionEngineRef.current!.removeSession(sessionId);
     commit((prev) => ({
@@ -1311,7 +1366,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
     }
 
     try {
-      const discovered = await transportRef.current!.listCodexModels(target, credentials);
+      const discovered = await getTransport(target).listCodexModels(target, credentials);
       if (discovered.length === 0) {
         return fallback;
       }
@@ -1441,7 +1496,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
 
     if (session.daemonSessionId) {
       // Daemon session: fetch by daemonSessionId, also try native history for richer data
-      history = await transportRef.current!.getHistory(
+      history = await getTransport(target).getHistory(
         target,
         credentials,
         {
@@ -1453,7 +1508,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
       // (native history may have more context from continuation files)
       if (session.conversationId && session.workingDirectory && (toolName === "claude" || toolName === "codex")) {
         try {
-          const nativeHistory = await transportRef.current!.getHistory(
+          const nativeHistory = await getTransport(target).getHistory(
             target,
             credentials,
             {
@@ -1480,7 +1535,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
       }
     } else if (toolName === "claude" || toolName === "codex") {
       // Native-only session: fetch by tool + resumeId + cwd
-      history = await transportRef.current!.getHistory(
+      history = await getTransport(target).getHistory(
         target,
         credentials,
         {
@@ -1512,13 +1567,393 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
     });
   }, []);
 
+  const getRemoteUrl = useCallback(async (sessionId: string): Promise<string> => {
+    const session = stateRef.current.sessions.find((s) => s.id === sessionId);
+    if (!session) throw new Error("Session not found");
+    const target = stateRef.current.targets.find((t) => t.id === session.targetId);
+    if (!target) throw new Error("Target not found");
+    const credentials = await loadTargetCredentials(target.id);
+    if (!credentials) throw new Error("Target credentials are missing");
+    if (!session.daemonSessionId) throw new Error("Session has no daemon session");
+    const result = await getTransport(target).sessionRemote(target, credentials, session.daemonSessionId);
+    return result.remoteUrl;
+  }, []);
+
+  const getSchedules = useCallback(async (): Promise<import("../core/ai/Transport").ScheduledTask[]> => {
+    const results: import("../core/ai/Transport").ScheduledTask[] = [];
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        const tasks = await getTransport(target).scheduleList(target, credentials);
+        results.push(...tasks.map((task) => ({
+          ...task,
+          targetId: target.id,
+          targetLabel: target.label,
+        })));
+      } catch { /* ignore */ }
+    }
+    return results;
+  }, []);
+
+  const getSchedule = useCallback(async (scheduleId: string): Promise<import("../core/ai/Transport").ScheduledTask> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        const schedule = await getTransport(target).scheduleGet(target, credentials, scheduleId);
+        return {
+          ...schedule,
+          targetId: target.id,
+          targetLabel: target.label,
+        };
+      } catch { /* try next target */ }
+    }
+    throw new Error("Schedule not found on any target");
+  }, []);
+
+  const createSchedule = useCallback(async (
+    targetId: string,
+    schedule: import("../core/ai/Transport").ScheduleDraft,
+  ): Promise<import("../core/ai/Transport").ScheduledTask> => {
+    const target = stateRef.current.targets.find((entry) => entry.id === targetId);
+    if (!target) throw new Error("Target not found");
+    const credentials = await loadTargetCredentials(target.id);
+    if (!credentials) throw new Error("Target credentials are missing from secure store");
+    const created = await getTransport(target).scheduleCreate(target, credentials, schedule);
+    return {
+      ...created,
+      targetId: target.id,
+      targetLabel: target.label,
+    };
+  }, []);
+
+  const updateSchedule = useCallback(async (
+    scheduleId: string,
+    updates: Partial<import("../core/ai/Transport").ScheduleDraft>,
+    targetHint?: string,
+  ): Promise<import("../core/ai/Transport").ScheduledTask> => {
+    const orderedTargets = targetHint
+      ? [
+          ...stateRef.current.targets.filter((target) => target.id === targetHint),
+          ...stateRef.current.targets.filter((target) => target.id !== targetHint),
+        ]
+      : stateRef.current.targets;
+
+    for (const target of orderedTargets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        const updated = await getTransport(target).scheduleUpdate(target, credentials, scheduleId, updates);
+        return {
+          ...updated,
+          targetId: target.id,
+          targetLabel: target.label,
+        };
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to update schedule on any target");
+  }, []);
+
+  const deleteSchedule = useCallback(async (scheduleId: string, targetHint?: string): Promise<void> => {
+    const orderedTargets = targetHint
+      ? [
+          ...stateRef.current.targets.filter((target) => target.id === targetHint),
+          ...stateRef.current.targets.filter((target) => target.id !== targetHint),
+        ]
+      : stateRef.current.targets;
+
+    for (const target of orderedTargets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        await getTransport(target).scheduleDelete(target, credentials, scheduleId);
+        return;
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to delete schedule on any target");
+  }, []);
+
+  const runSchedule = useCallback(async (taskId: string): Promise<void> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        await getTransport(target).scheduleRun(target, credentials, taskId);
+        return;
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to run schedule on any target");
+  }, []);
+
+  const getBridgeConfig = useCallback(async (targetId: string): Promise<import("../core/ai/Transport").BridgeRuntimeConfig> => {
+    const target = stateRef.current.targets.find((entry) => entry.id === targetId);
+    if (!target) throw new Error("Target not found");
+    const credentials = await loadTargetCredentials(target.id);
+    if (!credentials) throw new Error("Target credentials are missing from secure store");
+    return await getTransport(target).bridgeConfigGet(target, credentials);
+  }, []);
+
+  const updateBridgeConfig = useCallback(async (
+    targetId: string,
+    updates: Partial<import("../core/ai/Transport").BridgeRuntimeConfig>,
+  ): Promise<import("../core/ai/Transport").BridgeRuntimeConfig> => {
+    const target = stateRef.current.targets.find((entry) => entry.id === targetId);
+    if (!target) throw new Error("Target not found");
+    const credentials = await loadTargetCredentials(target.id);
+    if (!credentials) throw new Error("Target credentials are missing from secure store");
+    return await getTransport(target).bridgeConfigUpdate(target, credentials, updates);
+  }, []);
+
+  const getTeams = useCallback(async (): Promise<import("../core/ai/Transport").TeamInfo[]> => {
+    const results: import("../core/ai/Transport").TeamInfo[] = [];
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        const teams = await getTransport(target).teamList(target, credentials);
+        results.push(...teams.map((team) => ({
+          ...team,
+          targetId: target.id,
+          targetLabel: target.label,
+        })));
+      } catch { /* ignore */ }
+    }
+    return results;
+  }, []);
+
+  const getTeam = useCallback(async (teamId: string): Promise<import("../core/ai/Transport").TeamInfo> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        const team = await getTransport(target).teamGet(target, credentials, teamId);
+        return {
+          ...team,
+          targetId: target.id,
+          targetLabel: target.label,
+        };
+      } catch { /* try next target */ }
+    }
+    throw new Error("Team not found on any target");
+  }, []);
+
+  const createTeam = useCallback(async (opts: { targetId?: string; name: string; cwd: string; members: import("../core/ai/Transport").TeamMemberInput[] }): Promise<import("../core/ai/Transport").TeamInfo> => {
+    const orderedTargets = opts.targetId
+      ? [
+          ...stateRef.current.targets.filter((target) => target.id === opts.targetId),
+          ...stateRef.current.targets.filter((target) => target.id !== opts.targetId),
+        ]
+      : stateRef.current.targets;
+
+    for (const target of orderedTargets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        const team = await getTransport(target).teamCreate(target, credentials, {
+          name: opts.name,
+          cwd: opts.cwd,
+          members: opts.members,
+        });
+        return {
+          ...team,
+          targetId: target.id,
+          targetLabel: target.label,
+        };
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to create team on any target");
+  }, []);
+
+  const updateTeam = useCallback(async (
+    teamId: string,
+    updates: { name?: string; cwd?: string; members?: import("../core/ai/Transport").TeamMemberInput[] },
+  ): Promise<import("../core/ai/Transport").TeamInfo> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        const team = await getTransport(target).teamUpdate(target, credentials, teamId, updates);
+        return {
+          ...team,
+          targetId: target.id,
+          targetLabel: target.label,
+        };
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to update team on any target");
+  }, []);
+
+  const deleteTeam = useCallback(async (teamId: string): Promise<void> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        await getTransport(target).teamDelete(target, credentials, teamId);
+        return;
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to delete team on any target");
+  }, []);
+
+  const getTeamTasks = useCallback(async (teamId: string): Promise<import("../core/ai/Transport").TeamTaskInfo[]> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        return await getTransport(target).teamTaskList(target, credentials, teamId);
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to get team tasks on any target");
+  }, []);
+
+  const createTeamTask = useCallback(async (teamId: string, task: { subject: string; description: string; owner: string; dependencies?: string[] }): Promise<import("../core/ai/Transport").TeamTaskInfo> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        return await getTransport(target).teamTaskCreate(target, credentials, teamId, task);
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to create team task on any target");
+  }, []);
+
+  const updateTeamTask = useCallback(async (teamId: string, taskId: string, updates: { status?: string; owner?: string }): Promise<import("../core/ai/Transport").TeamTaskInfo> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        return await getTransport(target).teamTaskUpdate(target, credentials, teamId, taskId, updates);
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to update team task on any target");
+  }, []);
+
+  const addTeamTaskComment = useCallback(async (teamId: string, taskId: string, text: string): Promise<void> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        await getTransport(target).teamTaskComment(target, credentials, teamId, taskId, "user", text);
+        return;
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to add comment on any target");
+  }, []);
+
+  const sendTeamMessage = useCallback(async (teamId: string, to: string, text: string): Promise<void> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        await getTransport(target).teamMessageSend(target, credentials, teamId, "user", to, text);
+        return;
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to send team message on any target");
+  }, []);
+
+  const getTeamMessages = useCallback(async (teamId: string, limit?: number): Promise<import("../core/ai/Transport").TeamMessageInfo[]> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        return await getTransport(target).teamMessageList(target, credentials, teamId, limit);
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to get team messages on any target");
+  }, []);
+
+  const generateTeamPlan = useCallback(async (
+    teamId: string,
+    request: string,
+    opts?: import("../core/ai/Transport").TeamPlanSubmitOpts,
+  ): Promise<void> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        await getTransport(target).teamPlanGenerate(target, credentials, teamId, request, opts);
+        return;
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to generate team plan on any target");
+  }, []);
+
+  const submitTeamPlan = useCallback(async (teamId: string, plan: import("../core/ai/Transport").TeamPlanInput, opts?: import("../core/ai/Transport").TeamPlanSubmitOpts): Promise<import("../core/ai/Transport").TeamPlanInfo> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        return await getTransport(target).teamPlanSubmit(target, credentials, teamId, plan, opts);
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to submit team plan on any target");
+  }, []);
+
+  const reviewTeamPlan = useCallback(async (teamId: string, planId: string, vote: "approve" | "revise" | "reject", feedback?: string): Promise<import("../core/ai/Transport").TeamPlanInfo> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        return await getTransport(target).teamPlanReview(target, credentials, teamId, planId, "user", vote, feedback);
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to review team plan on any target");
+  }, []);
+
+  const reviseTeamPlan = useCallback(async (teamId: string, planId: string, revision: import("../core/ai/Transport").TeamPlanInput): Promise<import("../core/ai/Transport").TeamPlanInfo> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        return await getTransport(target).teamPlanRevise(target, credentials, teamId, planId, "user", revision);
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to revise team plan on any target");
+  }, []);
+
+  const getTeamPlan = useCallback(async (teamId: string, planId: string): Promise<import("../core/ai/Transport").TeamPlanInfo> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        return await getTransport(target).teamPlanGet(target, credentials, teamId, planId);
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to get team plan on any target");
+  }, []);
+
+  const getLatestTeamPlan = useCallback(async (teamId: string): Promise<import("../core/ai/Transport").TeamPlanInfo | null> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        return await getTransport(target).teamPlanLatest(target, credentials, teamId);
+      } catch { /* try next target */ }
+    }
+    return null;
+  }, []);
+
+  const deleteTeamPlan = useCallback(async (teamId: string, planId: string): Promise<void> => {
+    for (const target of stateRef.current.targets) {
+      const credentials = await loadTargetCredentials(target.id);
+      if (!credentials) continue;
+      try {
+        await getTransport(target).teamPlanDelete(target, credentials, teamId, planId);
+        return;
+      } catch { /* try next target */ }
+    }
+    throw new Error("Failed to delete team plan on any target");
+  }, []);
+
   const importDaemonSessions = useCallback(async (targetId: string): Promise<AiSession[]> => {
     const target = stateRef.current.targets.find((t) => t.id === targetId);
     if (!target) throw new Error("Target not found");
     const credentials = await loadTargetCredentials(target.id);
     if (!credentials) throw new Error("Target credentials are missing from secure store");
 
-    const daemonSessions = await transportRef.current!.listSessions(target, credentials);
+    const daemonSessions = await getTransport(target).listSessions(target, credentials);
 
     // Filter: only importable statuses, has conversationId, not already imported
     const existingDaemonIds = new Set(
@@ -1707,6 +2142,33 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
     detachFromSession,
     ensureSessionAttached,
     refreshSessionHistory,
+    getRemoteUrl,
+    getSchedules,
+    getSchedule,
+    createSchedule,
+    updateSchedule,
+    deleteSchedule,
+    runSchedule,
+    getBridgeConfig,
+    updateBridgeConfig,
+    getTeams,
+    getTeam,
+    createTeam,
+    updateTeam,
+    deleteTeam,
+    getTeamTasks,
+    createTeamTask,
+    updateTeamTask,
+    addTeamTaskComment,
+    sendTeamMessage,
+    getTeamMessages,
+    generateTeamPlan,
+    submitTeamPlan,
+    reviewTeamPlan,
+    reviseTeamPlan,
+    getTeamPlan,
+    getLatestTeamPlan,
+    deleteTeamPlan,
   }), [
     ready,
     state.targets,
@@ -1772,6 +2234,33 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }): J
     detachFromSession,
     ensureSessionAttached,
     refreshSessionHistory,
+    getTeams,
+    getTeam,
+    createTeam,
+    updateTeam,
+    deleteTeam,
+    getTeamTasks,
+    createTeamTask,
+    updateTeamTask,
+    addTeamTaskComment,
+    sendTeamMessage,
+    getTeamMessages,
+    generateTeamPlan,
+    submitTeamPlan,
+    reviewTeamPlan,
+    reviseTeamPlan,
+    getTeamPlan,
+    getLatestTeamPlan,
+    deleteTeamPlan,
+    getRemoteUrl,
+    getSchedules,
+    getSchedule,
+    createSchedule,
+    updateSchedule,
+    deleteSchedule,
+    runSchedule,
+    getBridgeConfig,
+    updateBridgeConfig,
   ]);
 
   return <AppStoreContext value={value}>{children}</AppStoreContext>;

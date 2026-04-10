@@ -1,12 +1,51 @@
 import { loadState, saveState } from "./stateStore.js";
-import { ensureSessionDir, removeSessionDir } from "./outputStore.js";
+import { ensureSessionDir, readOutputLines, removeSessionDir } from "./outputStore.js";
 import { spawnTurn, patchCodexSessionSource, type RunningProcess } from "./processRunner.js";
 import { sendPushNotification } from "./pushNotify.js";
+import { purgeExpiredBridgeClientSessions } from "./bridgeAuth.js";
 import { newId, nowISO, log, logError } from "./utils.js";
 import type { DaemonState, SessionRecord, SessionStatus, Tool, IpcResponse } from "./types.js";
 
 const runningProcesses = new Map<string, RunningProcess>();
 let state: DaemonState = { version: 1, sessions: {} };
+
+interface SessionCreationMeta {
+  runKind?: "interactive" | "scheduled" | "team";
+  scheduleId?: string;
+  scheduleName?: string;
+  teamId?: string;
+  teamName?: string;
+}
+
+function extractLastProviderError(sessionId: string): string | undefined {
+  const lines = readOutputLines(sessionId, 0);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    try {
+      const entry = JSON.parse(lines[i]!) as { t?: string; line?: string };
+      if ((entry.t !== "o" && entry.t !== "e") || !entry.line) continue;
+      try {
+        const parsed = JSON.parse(entry.line) as {
+          type?: string;
+          message?: string;
+          error?: { message?: string };
+        };
+        if (parsed.type === "error" && typeof parsed.message === "string" && parsed.message.trim()) {
+          return parsed.message.trim();
+        }
+        if (parsed.type === "turn.failed" && typeof parsed.error?.message === "string" && parsed.error.message.trim()) {
+          return parsed.error.message.trim();
+        }
+      } catch {
+        if (entry.t === "e" && entry.line.trim()) {
+          return entry.line.trim();
+        }
+      }
+    } catch {
+      // Ignore malformed output entries.
+    }
+  }
+  return undefined;
+}
 
 // ── State access ──
 
@@ -16,6 +55,24 @@ export function getState(): DaemonState {
 
 export function init(): void {
   state = loadState();
+  let needsPersist = false;
+
+  if (state.bridge && purgeExpiredBridgeClientSessions(state.bridge)) {
+    needsPersist = true;
+  }
+
+  for (const team of Object.values(state.teams ?? {})) {
+    for (const member of team.members) {
+      const session = state.sessions[member.sessionId];
+      if (!session || session.pendingRemoval) continue;
+      if (session.runKind !== "team" || session.teamId !== team.id || session.teamName !== team.name) {
+        session.runKind = "team";
+        session.teamId = team.id;
+        session.teamName = team.name;
+        needsPersist = true;
+      }
+    }
+  }
 
   // Mark any previously-running sessions as interrupted
   for (const [id, session] of Object.entries(state.sessions)) {
@@ -35,7 +92,11 @@ export function init(): void {
     }
   }
 
-  persist();
+  if (needsPersist) {
+    persist();
+  } else {
+    saveState(state);
+  }
   log(`Loaded ${Object.keys(state.sessions).length} sessions`);
 }
 
@@ -63,6 +124,7 @@ export function createSession(
   model?: string,
   autoAccept?: boolean,
   conversationId?: string,
+  metadata?: SessionCreationMeta,
 ): SessionRecord {
   const id = newId("ses");
   const now = nowISO();
@@ -71,6 +133,11 @@ export function createSession(
     id,
     tool,
     status: "idle",
+    runKind: metadata?.runKind ?? "interactive",
+    scheduleId: metadata?.scheduleId,
+    scheduleName: metadata?.scheduleName,
+    teamId: metadata?.teamId,
+    teamName: metadata?.teamName,
     workingDirectory,
     model,
     autoAccept,
@@ -91,6 +158,18 @@ export function createSession(
 
 export function getSession(id: string): SessionRecord | undefined {
   return state.sessions[id];
+}
+
+export function updateSession(
+  id: string,
+  updates: Partial<Pick<SessionRecord, "workingDirectory" | "model" | "runKind" | "teamId" | "teamName" | "scheduleId" | "scheduleName">>,
+): SessionRecord | undefined {
+  const session = state.sessions[id];
+  if (!session) return undefined;
+  Object.assign(session, updates);
+  session.updatedAt = nowISO();
+  persist();
+  return session;
 }
 
 export function listSessions(): SessionRecord[] {
@@ -213,7 +292,7 @@ export function sendTurn(id: string, prompt: string, turnOpts?: { mode?: string;
       } else {
         session.status = "failed";
         if (session.lastTurn) {
-          session.lastTurn.error = `Process exited with code ${result.exitCode}`;
+          session.lastTurn.error = extractLastProviderError(id) ?? `Process exited with code ${result.exitCode}`;
         }
       }
 

@@ -31,7 +31,6 @@ export function NewSessionSheet({ route, navigation }: Props): JSX.Element {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hostDropdownOpen, setHostDropdownOpen] = useState(false);
-
   // Auto-select first host on mount
   useEffect(() => {
     if (targets.length > 0 && selectedTargetId === null) {

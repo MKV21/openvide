@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Animated, FlatList, Keyboard, KeyboardAvoidingView, Linking, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -50,6 +50,7 @@ export function AiChatScreen({ route, navigation }: Props): JSX.Element {
     ensureSessionAttached,
     detachFromSession,
     refreshSessionHistory,
+    getRemoteUrl,
   } = useAppStore();
 
   const insets = useSafeAreaInsets();
@@ -198,6 +199,21 @@ export function AiChatScreen({ route, navigation }: Props): JSX.Element {
         label: "Terminal",
         icon: "terminal",
         onPress: () => navigation.navigate("Terminal", { targetId, initialDirectory: workDir }),
+      });
+    }
+    // Claude-specific actions
+    if (session.tool === "claude" && session.daemonSessionId) {
+      items.push({
+        label: "Open Remote",
+        icon: "external-link",
+        onPress: async () => {
+          try {
+            const url = await getRemoteUrl(session.id);
+            Linking.openURL(url);
+          } catch (err) {
+            Alert.alert("Remote failed", err instanceof Error ? err.message : String(err));
+          }
+        },
       });
     }
     items.push({

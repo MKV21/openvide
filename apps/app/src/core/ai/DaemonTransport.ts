@@ -1,5 +1,6 @@
 import { NativeSshClient, type SshRunResult } from "../ssh/nativeSsh";
 import type { SshCredentials, TargetProfile } from "../types";
+import type { Transport, ScheduledTask, ScheduleDraft, TeamInfo, TeamTaskInfo, TeamMessageInfo, TeamPlanInfo, TeamMemberInput, TeamPlanInput, TeamPlanSubmitOpts, BridgeRuntimeConfig } from "./Transport";
 
 export interface DaemonSessionInfo {
   id: string;
@@ -144,7 +145,7 @@ function parseIpcResponse(output: DaemonCommandResult): Record<string, unknown> 
   throw new Error(`No valid JSON response from daemon${suffix}`);
 }
 
-export class DaemonTransport {
+export class DaemonTransport implements Transport {
   private static readonly DEFAULT_DAEMON_TIMEOUT_MS = 30000;
   private static readonly LONG_CMD_TIMEOUT_MS = 60000;
   private static readonly DAEMON_CMD = "openvide-daemon";
@@ -294,12 +295,11 @@ export class DaemonTransport {
       "openvide-daemon", "session", "create",
       "--tool", escapeShellArg(opts.tool),
       "--cwd", escapeShellArg(opts.cwd),
+      "--auto-accept",
     ];
     if (opts.model) {
       parts.push("--model", escapeShellArg(opts.model));
     }
-    // Always auto-accept — daemon is non-interactive
-    parts.push("--auto-accept");
     if (opts.conversationId) {
       parts.push("--conversation-id", escapeShellArg(opts.conversationId));
     }
@@ -763,6 +763,444 @@ export class DaemonTransport {
     } catch (err) {
       __DEV__ && console.log(`[OV:transport] registerPushToken error: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  async bridgeConfigGet(
+    target: TargetProfile,
+    credentials: SshCredentials,
+  ): Promise<BridgeRuntimeConfig> {
+    const cmd = "openvide-daemon bridge config";
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) {
+      throw new Error((resp["error"] as string) ?? "Bridge config get failed");
+    }
+    return resp["bridgeConfig"] as BridgeRuntimeConfig;
+  }
+
+  async bridgeConfigUpdate(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    updates: Partial<BridgeRuntimeConfig>,
+  ): Promise<BridgeRuntimeConfig> {
+    const cmd = ["openvide-daemon", "bridge", "config"];
+    if (updates.defaultCwd !== undefined) {
+      cmd.push("--default-cwd", escapeShellArg(updates.defaultCwd));
+    }
+    if (updates.evenAiTool) {
+      cmd.push("--even-ai-tool", updates.evenAiTool);
+    }
+    if (updates.evenAiMode) {
+      cmd.push("--even-ai-mode", updates.evenAiMode);
+    }
+    if (updates.evenAiPinnedSessionId !== undefined) {
+      cmd.push("--even-ai-pin-session", escapeShellArg(updates.evenAiPinnedSessionId));
+    }
+    const result = await this.execDaemonCommand(target, credentials, cmd.join(" "));
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) {
+      throw new Error((resp["error"] as string) ?? "Bridge config update failed");
+    }
+    return resp["bridgeConfig"] as BridgeRuntimeConfig;
+  }
+
+  // ── Remote + Schedule commands ──
+
+  async sessionRemote(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    sessionId: string,
+  ): Promise<{ remoteUrl: string }> {
+    const cmd = `openvide-daemon session remote --id ${escapeShellArg(sessionId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) {
+      throw new Error((resp["error"] as string) ?? "Remote failed");
+    }
+    return { remoteUrl: resp["remoteUrl"] as string };
+  }
+
+  async scheduleList(
+    target: TargetProfile,
+    credentials: SshCredentials,
+  ): Promise<ScheduledTask[]> {
+    const cmd = "openvide-daemon schedule list";
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) {
+      throw new Error((resp["error"] as string) ?? "Schedule list failed");
+    }
+    return (resp["schedules"] as ScheduledTask[]) ?? [];
+  }
+
+  async scheduleGet(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    scheduleId: string,
+  ): Promise<ScheduledTask> {
+    const cmd = `openvide-daemon schedule get --id ${escapeShellArg(scheduleId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) {
+      throw new Error((resp["error"] as string) ?? "Schedule get failed");
+    }
+    return resp["schedule"] as ScheduledTask;
+  }
+
+  async scheduleCreate(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    schedule: ScheduleDraft,
+  ): Promise<ScheduledTask> {
+    const cmd = [
+      "openvide-daemon", "schedule", "create",
+      "--name", escapeShellArg(schedule.name),
+      "--schedule", escapeShellArg(schedule.schedule),
+      "--target-json", escapeShellArg(JSON.stringify(schedule.target)),
+    ];
+    if (schedule.project) {
+      cmd.push("--project", escapeShellArg(schedule.project));
+    }
+    if (schedule.enabled !== undefined) {
+      cmd.push("--enabled", schedule.enabled ? "true" : "false");
+    }
+    const result = await this.execDaemonCommand(target, credentials, cmd.join(" "));
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) {
+      throw new Error((resp["error"] as string) ?? "Schedule create failed");
+    }
+    return resp["schedule"] as ScheduledTask;
+  }
+
+  async scheduleUpdate(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    scheduleId: string,
+    updates: Partial<ScheduleDraft>,
+  ): Promise<ScheduledTask> {
+    const cmd = [
+      "openvide-daemon", "schedule", "update",
+      "--id", escapeShellArg(scheduleId),
+    ];
+    if (updates.name) cmd.push("--name", escapeShellArg(updates.name));
+    if (updates.schedule) cmd.push("--schedule", escapeShellArg(updates.schedule));
+    if (updates.project) cmd.push("--project", escapeShellArg(updates.project));
+    if (updates.enabled !== undefined) cmd.push("--enabled", updates.enabled ? "true" : "false");
+    if (updates.target) cmd.push("--target-json", escapeShellArg(JSON.stringify(updates.target)));
+    const result = await this.execDaemonCommand(target, credentials, cmd.join(" "));
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) {
+      throw new Error((resp["error"] as string) ?? "Schedule update failed");
+    }
+    return resp["schedule"] as ScheduledTask;
+  }
+
+  async scheduleDelete(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    scheduleId: string,
+  ): Promise<void> {
+    const cmd = `openvide-daemon schedule delete --id ${escapeShellArg(scheduleId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) {
+      throw new Error((resp["error"] as string) ?? "Schedule delete failed");
+    }
+  }
+
+  async scheduleRun(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    taskId: string,
+  ): Promise<void> {
+    const cmd = `openvide-daemon schedule run --task-id ${escapeShellArg(taskId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd, { timeoutMs: 60000 });
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) {
+      throw new Error((resp["error"] as string) ?? "Schedule run failed");
+    }
+  }
+
+  // ── Channel commands ──
+
+  // ── Team commands ──
+
+  async teamCreate(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    opts: { name: string; cwd: string; members: TeamMemberInput[] },
+  ): Promise<TeamInfo> {
+    const cmd = `openvide-daemon team create --name ${escapeShellArg(opts.name)} --cwd ${escapeShellArg(opts.cwd)} --members ${escapeShellArg(JSON.stringify(opts.members))}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team create failed");
+    return resp["team"] as unknown as TeamInfo;
+  }
+
+  async teamList(
+    target: TargetProfile,
+    credentials: SshCredentials,
+  ): Promise<TeamInfo[]> {
+    const cmd = "openvide-daemon team list";
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team list failed");
+    return (resp["teams"] as TeamInfo[]) ?? [];
+  }
+
+  async teamGet(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+  ): Promise<TeamInfo> {
+    const cmd = `openvide-daemon team get --team-id ${escapeShellArg(teamId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team get failed");
+    return resp["team"] as unknown as TeamInfo;
+  }
+
+  async teamUpdate(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    updates: { name?: string; cwd?: string; members?: TeamMemberInput[] },
+  ): Promise<TeamInfo> {
+    const parts = [
+      "openvide-daemon", "team", "update",
+      "--team-id", escapeShellArg(teamId),
+    ];
+    if (updates.name) parts.push("--name", escapeShellArg(updates.name));
+    if (updates.cwd) parts.push("--cwd", escapeShellArg(updates.cwd));
+    if (updates.members) parts.push("--members", escapeShellArg(JSON.stringify(updates.members)));
+    const result = await this.execDaemonCommand(target, credentials, parts.join(" "), { timeoutMs: 60000 });
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team update failed");
+    return resp["team"] as unknown as TeamInfo;
+  }
+
+  async teamDelete(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+  ): Promise<void> {
+    const cmd = `openvide-daemon team delete --team-id ${escapeShellArg(teamId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team delete failed");
+  }
+
+  async teamTaskCreate(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    task: { subject: string; description: string; owner: string; dependencies?: string[] },
+  ): Promise<TeamTaskInfo> {
+    const parts = [
+      "openvide-daemon", "team", "task", "create",
+      "--team-id", escapeShellArg(teamId),
+      "--subject", escapeShellArg(task.subject),
+      "--description", escapeShellArg(task.description),
+      "--owner", escapeShellArg(task.owner),
+    ];
+    if (task.dependencies?.length) {
+      parts.push("--dependencies", escapeShellArg(JSON.stringify(task.dependencies)));
+    }
+    const result = await this.execDaemonCommand(target, credentials, parts.join(" "));
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team task create failed");
+    return resp["teamTask"] as unknown as TeamTaskInfo;
+  }
+
+  async teamTaskUpdate(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    taskId: string,
+    updates: { status?: string; owner?: string; description?: string },
+  ): Promise<TeamTaskInfo> {
+    const parts = [
+      "openvide-daemon", "team", "task", "update",
+      "--team-id", escapeShellArg(teamId),
+      "--task-id", escapeShellArg(taskId),
+    ];
+    if (updates.status) parts.push("--status", escapeShellArg(updates.status));
+    if (updates.owner) parts.push("--owner", escapeShellArg(updates.owner));
+    if (updates.description) parts.push("--description", escapeShellArg(updates.description));
+    const result = await this.execDaemonCommand(target, credentials, parts.join(" "));
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team task update failed");
+    return resp["teamTask"] as unknown as TeamTaskInfo;
+  }
+
+  async teamTaskList(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+  ): Promise<TeamTaskInfo[]> {
+    const cmd = `openvide-daemon team task list --team-id ${escapeShellArg(teamId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team task list failed");
+    return (resp["teamTasks"] as TeamTaskInfo[]) ?? [];
+  }
+
+  async teamTaskComment(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    taskId: string,
+    author: string,
+    text: string,
+  ): Promise<void> {
+    const cmd = `openvide-daemon team task comment --team-id ${escapeShellArg(teamId)} --task-id ${escapeShellArg(taskId)} --author ${escapeShellArg(author)} --text ${escapeShellArg(text)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team task comment failed");
+  }
+
+  async teamMessageSend(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    from: string,
+    to: string,
+    text: string,
+  ): Promise<void> {
+    const cmd = `openvide-daemon team message send --team-id ${escapeShellArg(teamId)} --from ${escapeShellArg(from)} --to ${escapeShellArg(to)} --text ${escapeShellArg(text)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team message send failed");
+  }
+
+  async teamMessageList(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    limit?: number,
+  ): Promise<TeamMessageInfo[]> {
+    const limitArg = limit !== undefined ? ` --limit ${String(limit)}` : "";
+    const cmd = `openvide-daemon team message list --team-id ${escapeShellArg(teamId)}${limitArg}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team message list failed");
+    return (resp["teamMessages"] as TeamMessageInfo[]) ?? [];
+  }
+
+  async teamPlanGenerate(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    request: string,
+    opts?: TeamPlanSubmitOpts,
+  ): Promise<void> {
+    const parts = [
+      "openvide-daemon", "team", "plan", "generate",
+      "--team-id", escapeShellArg(teamId),
+      "--request", escapeShellArg(request),
+    ];
+    if (opts?.mode) parts.push("--mode", escapeShellArg(opts.mode));
+    if (opts?.reviewers?.length) parts.push("--reviewers", escapeShellArg(JSON.stringify(opts.reviewers)));
+    if (opts?.maxIterations !== undefined) parts.push("--max-iterations", String(opts.maxIterations));
+    const result = await this.execDaemonCommand(target, credentials, parts.join(" "), { timeoutMs: 60000 });
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team plan generate failed");
+  }
+
+  async teamPlanSubmit(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    plan: TeamPlanInput,
+    opts?: TeamPlanSubmitOpts,
+  ): Promise<TeamPlanInfo> {
+    const parts = [
+      "openvide-daemon", "team", "plan", "submit",
+      "--team-id", escapeShellArg(teamId),
+      "--tasks", escapeShellArg(JSON.stringify(plan.tasks)),
+    ];
+    if (opts?.mode) parts.push("--mode", escapeShellArg(opts.mode));
+    if (opts?.reviewers?.length) parts.push("--reviewers", escapeShellArg(JSON.stringify(opts.reviewers)));
+    if (opts?.maxIterations !== undefined) parts.push("--max-iterations", String(opts.maxIterations));
+    const result = await this.execDaemonCommand(target, credentials, parts.join(" "));
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team plan submit failed");
+    return resp["teamPlan"] as unknown as TeamPlanInfo;
+  }
+
+  async teamPlanReview(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    planId: string,
+    reviewer: string,
+    vote: "approve" | "revise" | "reject",
+    feedback?: string,
+  ): Promise<TeamPlanInfo> {
+    const parts = [
+      "openvide-daemon", "team", "plan", "review",
+      "--team-id", escapeShellArg(teamId),
+      "--plan-id", escapeShellArg(planId),
+      "--reviewer", escapeShellArg(reviewer),
+      "--vote", escapeShellArg(vote),
+    ];
+    if (feedback !== undefined) parts.push("--feedback", escapeShellArg(feedback));
+    const result = await this.execDaemonCommand(target, credentials, parts.join(" "));
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team plan review failed");
+    return resp["teamPlan"] as unknown as TeamPlanInfo;
+  }
+
+  async teamPlanRevise(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    planId: string,
+    author: string,
+    revision: TeamPlanInput,
+  ): Promise<TeamPlanInfo> {
+    const cmd = `openvide-daemon team plan revise --team-id ${escapeShellArg(teamId)} --plan-id ${escapeShellArg(planId)} --author ${escapeShellArg(author)} --revision ${escapeShellArg(JSON.stringify({ tasks: revision.tasks }))}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team plan revise failed");
+    return resp["teamPlan"] as unknown as TeamPlanInfo;
+  }
+
+  async teamPlanGet(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    planId: string,
+  ): Promise<TeamPlanInfo> {
+    const cmd = `openvide-daemon team plan get --team-id ${escapeShellArg(teamId)} --plan-id ${escapeShellArg(planId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team plan get failed");
+    return resp["teamPlan"] as unknown as TeamPlanInfo;
+  }
+
+  async teamPlanLatest(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+  ): Promise<TeamPlanInfo | null> {
+    const cmd = `openvide-daemon team plan latest --team-id ${escapeShellArg(teamId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team plan latest failed");
+    return (resp["teamPlan"] as TeamPlanInfo | undefined) ?? null;
+  }
+
+  async teamPlanDelete(
+    target: TargetProfile,
+    credentials: SshCredentials,
+    teamId: string,
+    planId: string,
+  ): Promise<void> {
+    const cmd = `openvide-daemon team plan delete --team-id ${escapeShellArg(teamId)} --plan-id ${escapeShellArg(planId)}`;
+    const result = await this.execDaemonCommand(target, credentials, cmd);
+    const resp = parseIpcResponse(result);
+    if (!resp["ok"]) throw new Error((resp["error"] as string) ?? "Team plan delete failed");
   }
 
   private async execDaemonCommand(

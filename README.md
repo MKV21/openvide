@@ -5,50 +5,132 @@
 <h1 align="center">OpenVide</h1>
 
 <p align="center">
-  Chat-first remote control for Codex, Claude Code, and soon Gemini on any server.
+  Open source remote control for Claude Code, Codex, and team automation over SSH and an optional HTTPS bridge.
 </p>
 
 <p align="center">
-  Run AI coding agents over SSH from your phone, keep sessions alive on the host, and switch between chat, diffs, terminal, and file browsing without leaving the app.
-</p>
-
-<p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue" />
-  <img alt="Experimental" src="https://img.shields.io/badge/status-experimental-orange" />
-  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green" /></a>
+  <img alt="Version" src="https://img.shields.io/badge/version-0.2.0-blue" />
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-green" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-iOS%20%7C%20Android-black" />
-  <img alt="AI tools" src="https://img.shields.io/badge/AI-Codex%20%7C%20Claude%20Code%20%7C%20Gemini%20Soon-purple" />
 </p>
 
-<p align="center">
-  <strong>Remote hosts</strong> | <strong>Chat UX</strong> | <strong>Diff viewer</strong> | <strong>Terminal</strong> | <strong>File browser</strong>
-</p>
+## Overview
 
-<p align="center">
-  <img src="./screen1.jpg" alt="OpenVide host management screen" width="30%" />
-  <img src="./screen2.jpg" alt="OpenVide command stream and diff viewer" width="30%" />
-  <img src="./screen3.jpg" alt="OpenVide remote terminal screen" width="30%" />
-</p>
+This repository is the canonical OpenVide backend and mobile app:
 
-OpenVide is a React Native mobile app for running AI coding CLIs on remote machines over SSH. A lightweight daemon runs on each host to relay commands and persist sessions so work survives reconnects, backgrounding, and network drops.
+- `apps/app`: the React Native app
+- `apps/daemon`: the globally installed `openvide-daemon`
 
-## What the App Does
+The daemon is the source of truth for:
 
-- **Connect** to remote hosts over SSH (password or key-based auth)
-- **Detect** which AI CLIs are installed on the host (Claude, Codex, Gemini)
-- **Install, update, or remove** supported CLIs directly from the app
-- **Run multi-turn AI sessions** — send prompts, stream output live, resume conversations
-- **Persist sessions** on the remote host so work isn't lost when you disconnect
-- **Push notifications** when sessions complete (even if the app is killed)
-- **Store credentials securely** on-device (SSH keys via expo-secure-store)
+- interactive Claude and Codex sessions
+- workspace session history
+- the optional HTTPS/WebSocket bridge
+- Even AI compatible `/v1/chat/completions` routing
+- team orchestration
+- cron-based schedules
 
-## Prerequisites
+If you are using the `open-vide-g2` webview/glasses client, this repository is still the backend you should run in production.
 
-- **Node.js** >= 18
-- **Yarn** 4 (the repo uses Corepack — run `corepack enable` if needed)
-- **EAS CLI** for cloud builds: `npm install -g eas-cli`
-- **Xcode** (iOS) or **Android Studio** (Android) for local builds
-- An **Expo account** (free) at [expo.dev](https://expo.dev)
+## What OpenVide Does
+
+- Connects to remote hosts over SSH from the RN app
+- Persists AI CLI sessions on the host
+- Streams output live and preserves session history
+- Exposes an optional HTTPS bridge for browser/webview clients
+- Provides an OpenAI-compatible bridge endpoint for Even AI custom agents
+- Supports team chat, planning, task orchestration, and automated review
+- Supports daemon-owned scheduled jobs that can target a prompt session or a team
+
+## Repo Layout
+
+```text
+openvide/
+  apps/
+    app/              Expo / React Native app
+    daemon/           openvide-daemon (canonical shared backend)
+    bridge/           legacy bridge package artifacts; bridge now lives in daemon
+  docs/
+```
+
+## Architecture
+
+### RN app path
+
+```text
+RN app
+  -> SSH command execution
+  -> openvide-daemon CLI
+  -> local daemon IPC socket
+  -> daemon-managed Claude/Codex process
+```
+
+### Browser / webview / glasses path
+
+```text
+Browser or webview
+  -> HTTPS + WebSocket bridge
+  -> openvide-daemon
+  -> daemon-managed Claude/Codex process
+```
+
+### Even AI path
+
+```text
+Even AI custom agent
+  -> /v1/chat/completions
+  -> openvide-daemon bridge routing
+  -> existing or new daemon session
+  -> Claude/Codex response wrapped in OpenAI-compatible format
+```
+
+## Security Model
+
+### SSH mode
+
+When you use the RN app over SSH, the daemon does not need an exposed network port. The app executes `openvide-daemon` commands over SSH and the daemon communicates locally over its Unix socket.
+
+### Bridge mode
+
+The bridge is optional. When enabled:
+
+- pairing/bootstrap tokens are JWT Bearer tokens signed with a daemon-local HMAC secret
+- browser/webview clients can exchange that pairing token for a rotating bridge session:
+  - short-lived access token
+  - long-lived refresh token
+  - refresh token rotates on every renewal
+- legacy static bridge tokens still work for compatibility
+- bridge tokens can be revoked by JTI
+- WebSocket auth uses the same access token in the query string because browsers cannot set custom WS headers
+
+### TLS
+
+Bridge TLS is enabled by default.
+
+- the daemon generates a self-signed ECDSA certificate on first run
+- the generated certificate now includes SANs for:
+  - `localhost`
+  - `127.0.0.1`
+  - current hostname
+  - current non-internal IPv4 addresses
+
+Important:
+
+- the certificate is still self-signed
+- for browsers/webviews on LAN, the client must trust that certificate or you should front the bridge with a reverse proxy that provides a publicly trusted certificate
+- `openvide-daemon bridge enable --no-tls` is only appropriate for local development or a private tunnel; do not expose plain HTTP directly on an untrusted network
+- if you generated bridge certs before this version, rotate `~/.openvide-daemon/bridge/cert.pem` and `key.pem` once so the new SAN coverage is applied
+
+### Secrets at rest
+
+On the host:
+
+- daemon state is written under `~/.openvide-daemon/`
+- the daemon state file is saved with restrictive permissions
+- the bridge private key is saved with restrictive permissions
+- cached Claude auth fallback is stored with restrictive permissions
+
+This repository does not commit host secrets. User-specific app config, EAS config, Firebase config, and daemon runtime state are gitignored.
 
 ## Quick Start
 
@@ -58,51 +140,54 @@ cd openvide
 yarn install
 ```
 
-Then follow the setup steps below to configure your local environment before building.
+### Build and install the daemon
 
-## Project Structure
-
-```
-openvide/
-  apps/
-    app/              React Native mobile app (Expo SDK 54)
-    daemon/           openvide-daemon (Node.js relay, runs on remote machines)
-  package.json        Yarn workspaces + Turborepo root
+```bash
+yarn daemon:build
+cd apps/daemon
+npm install -g .
+openvide-daemon health
 ```
 
-## Setup
+`openvide-daemon health` auto-starts the daemon if needed.
 
-Several files are gitignored because they contain personal identifiers (bundle IDs, EAS project IDs, Firebase keys). You need to create them before building.
+For `systemd`, `launchd`, or another service manager, use the foreground mode instead:
 
-### 1. Variant configs
+```bash
+openvide-daemon run
+```
 
-The app supports two build variants: `production` and `development`. Each needs a `config.json` with your own bundle identifiers.
+### Build the RN app
+
+See the Expo / variant setup below, then:
 
 ```bash
 cd apps/app
+yarn prebuild:clean
+yarn ios
+```
 
-# Copy the example configs
+or use EAS:
+
+```bash
+cd apps/app
+yarn build:preview
+yarn build:prod
+yarn update:preview
+yarn update:prod
+```
+
+## RN App Setup
+
+### 1. Variant configs
+
+```bash
+cd apps/app
 cp variants/production/config.example.json variants/production/config.json
 cp variants/development/config.example.json variants/development/config.json
 ```
 
-Edit each `config.json` with your values:
-
-```json
-{
-  "displayName": "OpenVide",
-  "iosBundleIdentifier": "com.yourorg.openvide",
-  "androidPackage": "com.yourorg.openvide",
-  "scheme": "openvide",
-  "splashBackgroundColor": "#FFFFFF"
-}
-```
-
-You also need to provide icon and splash assets for each variant:
-- `variants/production/icon.png` (1024x1024 app icon)
-- `variants/production/splash.png` (splash screen image)
-- `variants/production/splash-animation.json` (Lottie animation for animated splash)
-- Same for `variants/development/`
+Edit each `config.json` with your bundle IDs and display settings.
 
 ### 2. Environment file
 
@@ -110,231 +195,299 @@ You also need to provide icon and splash assets for each variant:
 cp apps/app/.env.example apps/app/.env
 ```
 
-Edit `apps/app/.env`:
-
-```env
-# Apple Development Team ID (required for iOS builds)
-APP_DEVELOPMENT_TEAM=YOUR_TEAM_ID
-
-# EAS project ID (fallback — prefer app.json, see step 3)
-EXPO_PROJECT_ID=
-
-# Set to "1" to enable push notifications on iOS (requires paid Apple Developer account).
-# Leave unset for free/personal accounts — the app builds and works without push.
-# Android push is enabled automatically when google-services.json is present.
-# ENABLE_PUSH_NOTIFICATIONS=1
-```
-
-Find your Apple Team ID in Xcode → Settings → Accounts, or at [developer.apple.com](https://developer.apple.com).
-
 ### 3. EAS project link
-
-The app uses EAS (Expo Application Services) for cloud builds, OTA updates, and push notifications. Each contributor needs their own EAS project.
 
 ```bash
 cd apps/app
-
-# Create or link an EAS project (select your account/org when prompted)
 eas init
 ```
 
-This creates `apps/app/app.json` with your project's `owner`, `name`, `slug`, and `projectId`. This file is gitignored — see `app.json.example` for the format.
+`apps/app/app.json` is intentionally gitignored because it contains your personal Expo project wiring.
 
-If `eas init` fails to write to the dynamic config, create `app.json` manually:
+### 4. Optional push notifications
 
-```json
-{
-  "expo": {
-    "owner": "your-expo-username-or-org",
-    "name": "Your App Name",
-    "slug": "your-app-slug",
-    "extra": {
-      "eas": {
-        "projectId": "your-eas-project-id"
-      }
-    }
-  }
-}
-```
+Android push requires Firebase config. iOS push requires a paid Apple Developer account and `ENABLE_PUSH_NOTIFICATIONS=1`.
 
-### 4. Push notifications (optional)
+## Bridge Setup
 
-Push notifications are **entirely optional**. The app builds and works without them. Skip this step if you don't need notifications when sessions complete.
-
-**Android** — requires Firebase Cloud Messaging:
-
-1. Create a project at [Firebase Console](https://console.firebase.google.com)
-2. Add Android apps with your package names (e.g. `com.yourorg.openvide` and `com.yourorg.openvide.dev`)
-3. Download `google-services.json` and place it at `apps/app/google-services.json`
-4. In Firebase → Project Settings → Service accounts → **Generate new private key** (downloads a JSON file)
-5. Upload the service account key to your Expo project:
-   ```bash
-   cd apps/app
-   eas credentials --platform android
-   # Select your build profile → Push Notifications → FCM V1 → upload the JSON
-   ```
-
-Android push is enabled automatically when `google-services.json` is present. Without it, builds succeed normally — push just won't work.
-
-**iOS** — requires a paid Apple Developer account:
-
-Free/personal Apple Developer accounts don't support the Push Notifications capability, so it's **disabled by default**. To enable it, set in your `.env`:
-
-```env
-ENABLE_PUSH_NOTIFICATIONS=1
-```
-
-Then prebuild:
+Enable the bridge on the machine running the daemon:
 
 ```bash
-ENABLE_PUSH_NOTIFICATIONS=1 yarn prebuild:clean
+openvide-daemon bridge enable --port 7842
+openvide-daemon bridge status
+openvide-daemon bridge token --expire 24h
 ```
 
-Without this flag, the push entitlement is stripped from iOS builds so they work on any Apple Developer account.
-
-## Build the App
-
-### Local builds (recommended for development)
-
-Requires Xcode (iOS) or Android Studio (Android) installed locally.
+Useful bridge commands:
 
 ```bash
-cd apps/app
-
-# Generate native projects
-yarn prebuild:clean            # production variant
-yarn prebuild:dev:clean        # development variant
-
-# Run on device/simulator
-yarn ios                       # iOS (production)
-yarn ios:dev                   # iOS (development)
-yarn android                   # Android (production)
-yarn android:dev               # Android (development)
-
-# Start Metro bundler (if not auto-started)
-yarn start
+openvide-daemon bridge enable [--port 7842] [--no-tls]
+openvide-daemon bridge disable
+openvide-daemon bridge status
+openvide-daemon bridge token [--expire 24h]
+openvide-daemon bridge revoke --jti <token-jti>
+openvide-daemon bridge qr [--expire 24h] [--host <host>]
+openvide-daemon bridge config \
+  --bind-host 127.0.0.1 \
+  --default-cwd /Users/fabiogalimberti/Desktop/git \
+  --even-ai-tool codex \
+  --even-ai-mode last
 ```
 
-### Cloud builds (EAS)
+`openvide-daemon bridge token` now acts as a pairing/bootstrap token for webview/glasses clients. The browser client exchanges it for rotating access + refresh bridge credentials automatically.
 
-Builds are submitted to Expo's build service. No local Xcode/Android Studio required.
+## Self-Host Bootstrap
+
+If you want to run OpenVide on your own VPS or server, the easiest path is now:
+
+1. check the host
+2. run the guided setup
+3. copy the final token into the clients
+
+### 1. Check the VPS
 
 ```bash
-cd apps/app
-
-# Android (outputs .apk for dev/preview, .aab for production)
-yarn build:dev                 # development client
-yarn build:preview             # internal testing
-yarn build:prod                # production
-
-# iOS
-yarn build:dev:ios
-yarn build:preview:ios
-yarn build:prod:ios
+openvide-daemon deploy doctor \
+  --proxy caddy \
+  --domain openvide.example.com
 ```
 
-### OTA updates
+This reports:
 
-Push JavaScript bundle updates to devices without a full rebuild:
+- whether `systemd` is available
+- whether `caddy`/`nginx` is installed
+- whether the domain resolves
+- where the deployment bundle will be written
+
+### 2. Apply the setup
 
 ```bash
-cd apps/app
-yarn update:dev                # development channel
-yarn update:preview            # preview channel
-yarn update:prod               # production channel
+openvide-daemon deploy setup \
+  --proxy caddy \
+  --domain openvide.example.com \
+  --email you@example.com \
+  --output ./openvide-deploy \
+  --daemon-user ubuntu \
+  --default-cwd /srv/openvide \
+  --even-ai-tool codex \
+  --even-ai-mode last \
+  --issue-token
 ```
 
-## Build the Daemon
+The setup command:
 
-The daemon runs on each remote machine you want to control. It needs Node.js >= 18.
+- generates the deployment bundle
+- installs the `systemd` unit
+- enables and starts the daemon service
+- installs or updates the proxy config
+- configures the daemon bridge with secure defaults
+- optionally issues a client token
+
+### 3. If you only want the files without touching the machine
+
+Use scaffold mode:
 
 ```bash
-# From the repo root
-yarn install
-yarn daemon:build
+openvide-daemon deploy scaffold \
+  --proxy caddy \
+  --domain openvide.example.com \
+  --email you@example.com \
+  --output ./openvide-deploy \
+  --default-cwd /srv/openvide \
+  --even-ai-tool codex \
+  --even-ai-mode last
 ```
 
-Build output is in `apps/daemon/dist`. To install globally on a remote machine:
+The scaffold includes:
+
+- a `systemd` unit for `openvide-daemon run`
+- a bridge bootstrap script
+- a Caddy or nginx reverse-proxy config
+- a host-specific `README.md` with install steps
+
+Recommended production topology:
+
+```text
+browser / webview / Even AI
+  -> trusted HTTPS domain
+  -> reverse proxy (Caddy/nginx)
+  -> openvide-daemon bridge bound to 127.0.0.1
+```
+
+For proxy-backed deployments, the generated bootstrap configures:
 
 ```bash
-cd apps/daemon && npm install -g .
-openvide-daemon health   # auto-starts the daemon and returns status
+openvide-daemon bridge enable --port 7842 --no-tls
+openvide-daemon bridge config --bind-host 127.0.0.1
 ```
 
-The app can also install the daemon for you — go to a host's detail screen and tap "Install Daemon".
+That keeps:
 
-## How the App Works
+- public TLS at the proxy layer
+- the raw daemon bridge on loopback only
+- JWT bridge auth still enabled
 
-The app never talks to CLI tools directly. Instead, it communicates with the daemon on each remote machine over SSH:
+### Recommended “for dummies” recipe
 
-```
-Mobile App → SSH exec → openvide-daemon CLI → Unix socket IPC → Daemon process
-                                                                   ↓
-                                                             spawns CLI tool
-                                                          (claude / codex / gemini)
-                                                                   ↓
-                                                          stdout/stderr captured
-                                                          line-by-line → output.jsonl
-                                                                   ↓
-App ← SSH stdout ← openvide-daemon session stream --follow ← tails output.jsonl
-```
+If you have:
 
-1. The app opens an SSH connection to your host and runs `openvide-daemon` commands.
-2. Sessions are created per workspace and tool, then prompts are sent to the daemon.
-3. The daemon spawns the CLI tool, captures output line-by-line into JSONL files.
-4. The app tails streamed output over SSH and renders parsed events in a chat-like UI.
-5. For multi-turn conversations, the daemon tracks conversation IDs (`session_id` for Claude, `thread_id` for Codex) and passes them back on subsequent turns.
+- one Linux VPS
+- one domain pointed to that VPS
+- ports `80` and `443` reachable
 
-## How the Daemon Works
-
-The daemon (`openvide-daemon`) is a zero-dependency Node.js process that runs persistently on each remote machine.
-
-- **Self-daemonizes**: auto-starts on first CLI invocation, no manual setup needed.
-- **No open ports**: communicates only via a local Unix domain socket (`~/.openvide-daemon/daemon.sock`). All app-to-daemon communication goes through CLI commands executed over SSH.
-- **Persistent state**: sessions, output logs, and metadata live in `~/.openvide-daemon/`.
-- **Heartbeat**: PID file is touched every 30s; considered stale after 60s.
-- **Graceful shutdown**: sends SIGTERM to child processes, SIGKILL after 5s timeout.
-
-### IPC Commands
-
-| Command | Description |
-|---------|-------------|
-| `session.create` | Create a session record and output directory |
-| `session.send` | Spawn the CLI tool process, begin capturing output |
-| `session.stream --follow` | Tail output.jsonl in real-time (reads file directly, bypasses IPC) |
-| `session.cancel` | SIGINT → 3s grace → SIGTERM |
-| `session.get/list/remove` | CRUD on session records |
-| `config set-push-token` | Register Expo push token for notifications |
-| `health` | PID, uptime, session counts |
-| `stop` | Graceful shutdown |
-
-### Output Format (output.jsonl)
-
-Each line is one of three types:
-- `{ t: "o", ts, line }` — stdout from the CLI tool
-- `{ t: "e", ts, line }` — stderr from the CLI tool
-- `{ t: "m", ts, event, ... }` — meta events: `turn_start`, `turn_end` (with exit code), `error`
-
-## TypeScript Check
+then this is the shortest useful path:
 
 ```bash
-# From repo root — checks both app and daemon
-yarn check
+npm install -g @openvide/daemon
+openvide-daemon deploy doctor --proxy caddy --domain openvide.example.com
+openvide-daemon deploy setup --proxy caddy --domain openvide.example.com --email you@example.com --daemon-user ubuntu --issue-token
 ```
+
+Then use:
+
+- `https://openvide.example.com` as the host in `open-vide-g2`
+- the returned token as the bridge token / Even AI API key
+
+## Even AI Custom Agent Integration
+
+The bridge exposes OpenAI-compatible endpoints:
+
+- `POST /v1/chat/completions`
+- `POST /v1/chat/completions/claude`
+- `POST /v1/chat/completions/codex`
+- `POST /v1/chat/completions/gemini`
+
+### Recommended Even AI config
+
+Use:
+
+- endpoint: `https://YOUR_HOST:7842/v1/chat/completions`
+- API key / bearer token: output of `openvide-daemon bridge token`
+
+Bridge routing is controlled by daemon config:
+
+- `evenAiTool`: default tool when using the base `/v1/chat/completions`
+- `evenAiMode=new`: always create a fresh daemon session
+- `evenAiMode=last`: reuse the last bridge-created session for that tool when possible
+- `evenAiMode=pinned`: always route to a specific session ID
+
+Notes:
+
+- the request body `model` field is not the routing source of truth here
+- path suffix or bridge config decides the tool
+- scheduled sessions and team-owned sessions are intentionally filtered out of the normal interactive session lists in browser clients
+
+## Teams
+
+Teams are daemon-owned orchestration objects with:
+
+- a member roster
+- persistent member sessions
+- team chat
+- plan history
+- task board
+
+Current intended behavior:
+
+- user messages to `Team` go to the coordinator
+- direct messages to a member go only to that member
+- plans create structured tasks
+- task execution and review can advance automatically
+- team member sessions are tagged as `runKind: "team"`
+
+## Schedules
+
+Schedules are OpenVide-owned cron jobs, not Claude native `/schedule` jobs.
+
+Each schedule can target:
+
+- a prompt run
+- a team dispatch
+
+Important behavior:
+
+- manual `Run` fires immediately
+- cron execution fires on its matching schedule
+- prompt schedules create tagged `runKind: "scheduled"` sessions
+- team schedules dispatch into team orchestration instead of creating a normal interactive session
+
+## CLI Reference
+
+```bash
+openvide-daemon version
+openvide-daemon health
+openvide-daemon stop
+
+openvide-daemon session create --tool <claude|codex|gemini> --cwd <path>
+openvide-daemon session send --id <id> --prompt <prompt>
+openvide-daemon session stream --id <id> --follow
+openvide-daemon session list
+openvide-daemon session list-workspace --cwd <path>
+openvide-daemon session history --id <id>
+openvide-daemon session remove --id <id>
+
+openvide-daemon bridge enable
+openvide-daemon bridge token
+openvide-daemon bridge qr
+openvide-daemon bridge config ...
+
+openvide-daemon schedule list
+openvide-daemon schedule create ...
+openvide-daemon schedule update ...
+openvide-daemon schedule run --task-id <id>
+openvide-daemon schedule delete --id <id>
+
+openvide-daemon team list
+openvide-daemon team get --id <id>
+openvide-daemon team create ...
+openvide-daemon team update ...
+openvide-daemon team delete --id <id>
+openvide-daemon team task list --team-id <id>
+openvide-daemon team task create ...
+openvide-daemon team message list --team-id <id>
+openvide-daemon team plan latest --team-id <id>
+```
+
+## Open Source Safety
+
+Safe to publish:
+
+- source code
+- bridge / daemon implementation
+- example Expo config
+- example variant config
+
+Do not commit:
+
+- `apps/app/app.json`
+- `apps/app/google-services.json`
+- `apps/app/google-play-service-account.json`
+- `apps/app/.env`
+- `apps/app/variants/*/config.json`
+- anything under `~/.openvide-daemon/`
+
+## Known Gaps To Keep In Mind
+
+These are product-level limitations to remember during rollout:
+
+- Claude native `/schedule` integration is not used; schedules are daemon-owned
+- some newer webview/glasses labels still need translation coverage
+- some glasses mode/model controls are still visual-only and not fully wired to RPC
+- browser clients work best with a trusted bridge certificate or a reverse proxy terminating TLS
 
 ## Troubleshooting
 
-**`expo prebuild` fails with missing variant config**
-You haven't created `variants/production/config.json` (or `development`). Copy from the `.example.json` files — see [Setup step 1](#1-variant-configs).
+### Bridge works locally but browser/webview rejects TLS
 
-**`eas build` fails with "Cannot automatically write to dynamic config"**
-Create `apps/app/app.json` manually — see [Setup step 3](#3-eas-project-link).
+That is expected with a self-signed certificate unless:
 
-**`eas build` fails with Yarn/Corepack version error**
-The `eas.json` sets `COREPACK_ENABLE_STRICT=0` to handle this. If you still hit issues, make sure you're using the latest EAS CLI: `npm install -g eas-cli@latest`.
+- you trust the generated certificate on the client, or
+- you place the daemon behind a reverse proxy with a trusted certificate
 
-**iOS build fails with "Personal development teams do not support Push Notifications"**
-Make sure `ENABLE_PUSH_NOTIFICATIONS` is **not** set in your `.env` (or is empty). By default, push is disabled on iOS so free/personal accounts can build. See [Setup step 4](#4-push-notifications-optional).
+### Claude works in Terminal but fails in daemon
 
-**Push notifications return "InvalidCredentials"**
-The FCM V1 Service Account Key is missing or uploaded to the wrong EAS project. Run `eas credentials --platform android` and check that FCM V1 is set up under the correct application identifier (matching your `androidPackage` in the variant config).
+The daemon may be using cached auth fallback when Keychain access is unavailable. Restart the daemon from a local GUI terminal once so it can refresh its cached Claude credential.
+
+### EAS build fails on missing config
+
+You likely have not created your local `variants/*/config.json` or Expo `app.json`.

@@ -1,13 +1,15 @@
-import React from "react";
-import { Alert, Pressable, ScrollView, Switch, Text, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Alert, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { useAppStore } from "../state/AppStoreContext";
 import { SectionCard } from "../components/SectionCard";
 import { cn } from "../lib/utils";
 import { useThemeColors } from "../constants/colors";
 import { Icon } from "../components/Icon";
+import { ProviderIcon } from "../components/ProviderIcon";
 import type { MainStackParamList } from "../navigation/types";
 import { requestPermissions } from "../core/notifications";
+import type { BridgeRuntimeConfig } from "../core/ai/Transport";
 
 import { useBiometricSettings } from "../components/BiometricGate";
 
@@ -26,7 +28,9 @@ const SPEECH_LANGUAGES = [
 
 export function SettingsScreen({ navigation }: Props): JSX.Element {
   const {
+    targets,
     sessions,
+    listSessionsByTarget,
     clearSessions,
     showToolDetails,
     setShowToolDetails,
@@ -34,18 +38,74 @@ export function SettingsScreen({ navigation }: Props): JSX.Element {
     setNotificationsEnabled,
     speechLanguage,
     setSpeechLanguage,
+    getBridgeConfig,
+    updateBridgeConfig,
   } = useAppStore();
 
   const {
     accent,
+    foreground,
     mutedForeground,
     muted,
+    primaryForeground,
   } = useThemeColors();
 
   // iOS Switch thumb is always white — fall back to mutedForeground when accent is white (Codex dark)
   const switchActiveTrack = accent === "#FFFFFF" ? mutedForeground : accent;
 
   const biometric = useBiometricSettings();
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(targets[0]?.id ?? null);
+  const [bridgeConfig, setBridgeConfig] = useState<BridgeRuntimeConfig | null>(null);
+  const [bridgeLoading, setBridgeLoading] = useState(false);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
+  const [defaultCwdDraft, setDefaultCwdDraft] = useState("");
+
+  useEffect(() => {
+    if (!selectedTargetId && targets.length > 0) {
+      setSelectedTargetId(targets[0]!.id);
+    }
+  }, [selectedTargetId, targets]);
+
+  const loadBridgeConfig = useCallback(async (targetId: string) => {
+    setBridgeLoading(true);
+    setBridgeError(null);
+    try {
+      const config = await getBridgeConfig(targetId);
+      setBridgeConfig(config);
+      setDefaultCwdDraft(config.defaultCwd);
+    } catch (err) {
+      setBridgeError(err instanceof Error ? err.message : String(err));
+      setBridgeConfig(null);
+      setDefaultCwdDraft("");
+    } finally {
+      setBridgeLoading(false);
+    }
+  }, [getBridgeConfig]);
+
+  useEffect(() => {
+    if (!selectedTargetId) return;
+    void loadBridgeConfig(selectedTargetId);
+  }, [loadBridgeConfig, selectedTargetId]);
+
+  const handleBridgeUpdate = useCallback(async (updates: Partial<BridgeRuntimeConfig>) => {
+    if (!selectedTargetId) return;
+    try {
+      const updated = await updateBridgeConfig(selectedTargetId, updates);
+      setBridgeConfig(updated);
+      setDefaultCwdDraft(updated.defaultCwd);
+    } catch (err) {
+      Alert.alert("Bridge Update Failed", err instanceof Error ? err.message : String(err));
+    }
+  }, [selectedTargetId, updateBridgeConfig]);
+
+  const selectedTarget = targets.find((target) => target.id === selectedTargetId);
+  const endpointUrl = selectedTarget?.connectionType === "bridge" && selectedTarget.bridgeUrl
+    ? `${selectedTarget.bridgeUrl}/v1/chat/completions`
+    : "/v1/chat/completions";
+  const pinnedSessions = useMemo(
+    () => (selectedTargetId ? listSessionsByTarget(selectedTargetId).filter((session) => !!session.daemonSessionId) : []),
+    [listSessionsByTarget, selectedTargetId],
+  );
 
   const handleClearSessions = (): void => {
     Alert.alert(
@@ -151,6 +211,159 @@ export function SettingsScreen({ navigation }: Props): JSX.Element {
         </Pressable>
       </SectionCard>
 
+      <SectionCard title="Claude">
+        <Pressable
+          className="bg-muted rounded-2xl p-3.5 flex-row items-center justify-between active:opacity-80"
+          onPress={() => navigation.navigate("Schedules")}
+        >
+          <View>
+            <Text className="text-accent font-semibold text-sm">Scheduled Tasks</Text>
+            <Text className="text-dimmed text-xs mt-0.5">Create, edit, and run daemon schedules</Text>
+          </View>
+          <Icon name="chevron-right" size={18} color={mutedForeground} />
+        </Pressable>
+      </SectionCard>
+
+      <SectionCard title="Even AI Bridge">
+        {targets.length === 0 ? (
+          <Text className="text-dimmed text-xs">Add a host first to configure bridge routing.</Text>
+        ) : (
+          <>
+            <Text className="text-dimmed text-xs">Target Host</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {targets.map((target) => {
+                const selected = target.id === selectedTargetId;
+                return (
+                  <Pressable
+                    key={target.id}
+                    className="px-3.5 py-2.5 rounded-2xl active:opacity-80"
+                    style={{ backgroundColor: selected ? accent : muted }}
+                    onPress={() => setSelectedTargetId(target.id)}
+                  >
+                    <Text style={{ color: selected ? primaryForeground : foreground }}>{target.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <View className="bg-muted rounded-2xl p-3.5 gap-2">
+              <Text className="text-foreground text-[15px]">Endpoint</Text>
+              <Text className="text-dimmed text-xs">{endpointUrl}</Text>
+            </View>
+
+            {bridgeLoading ? (
+              <View className="py-6 items-center">
+                <ActivityIndicator size="small" />
+              </View>
+            ) : bridgeError ? (
+              <Text className="text-error-bright text-xs">{bridgeError}</Text>
+            ) : bridgeConfig ? (
+              <>
+                <View className="gap-2">
+                  <Text className="text-dimmed text-xs">Default Tool</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                    {(["claude", "codex"] as const).map((tool) => {
+                      const selected = bridgeConfig.evenAiTool === tool;
+                      return (
+                        <Pressable
+                          key={tool}
+                          className="px-3.5 py-2.5 rounded-2xl active:opacity-80 flex-row items-center gap-2"
+                          style={{ backgroundColor: selected ? accent : muted }}
+                          onPress={() => void handleBridgeUpdate({ evenAiTool: tool })}
+                        >
+                          <ProviderIcon tool={tool} size={14} />
+                          <Text style={{ color: selected ? primaryForeground : foreground }}>{tool}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
+                <View className="gap-2">
+                  <Text className="text-dimmed text-xs">Routing Mode</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                    {([
+                      { id: "last", label: "Latest Session" },
+                      { id: "new", label: "Always New" },
+                      { id: "pinned", label: "Pinned Session" },
+                    ] as const).map((mode) => {
+                      const selected = bridgeConfig.evenAiMode === mode.id;
+                      return (
+                        <Pressable
+                          key={mode.id}
+                          className="px-3.5 py-2.5 rounded-2xl active:opacity-80"
+                          style={{ backgroundColor: selected ? accent : muted }}
+                          onPress={() => void handleBridgeUpdate({ evenAiMode: mode.id })}
+                        >
+                          <Text style={{ color: selected ? primaryForeground : foreground }}>{mode.label}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
+                {bridgeConfig.evenAiMode === "pinned" ? (
+                  <View className="gap-2">
+                    <Text className="text-dimmed text-xs">Pinned Session</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                      {pinnedSessions.length > 0 ? pinnedSessions.map((session) => {
+                        const daemonSessionId = session.daemonSessionId!;
+                        const selected = bridgeConfig.evenAiPinnedSessionId === daemonSessionId;
+                        return (
+                          <Pressable
+                            key={session.id}
+                            className="px-3.5 py-2.5 rounded-2xl active:opacity-80 flex-row items-center gap-2"
+                            style={{ backgroundColor: selected ? accent : muted }}
+                            onPress={() => void handleBridgeUpdate({ evenAiPinnedSessionId: daemonSessionId })}
+                          >
+                            {(session.tool === "claude" || session.tool === "codex") ? <ProviderIcon tool={session.tool} size={14} /> : null}
+                            <Text numberOfLines={1} style={{ color: selected ? primaryForeground : foreground }}>
+                              {(session.workingDirectory?.split("/").filter(Boolean).pop() ?? session.tool)} · {daemonSessionId.slice(0, 8)}
+                            </Text>
+                          </Pressable>
+                        );
+                      }) : (
+                        <Text className="text-dimmed text-xs">No daemon-backed sessions available on this host.</Text>
+                      )}
+                    </ScrollView>
+                  </View>
+                ) : null}
+
+                <View className="gap-2">
+                  <Text className="text-dimmed text-xs">Default Working Directory</Text>
+                  <TextInput
+                    className="bg-muted rounded-2xl px-4 py-3 text-foreground"
+                    value={defaultCwdDraft}
+                    onChangeText={setDefaultCwdDraft}
+                    placeholder="~/projects"
+                    placeholderTextColor={mutedForeground}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <Pressable
+                    className="rounded-2xl py-3 items-center active:opacity-80"
+                    style={{ backgroundColor: defaultCwdDraft.trim() === bridgeConfig.defaultCwd ? muted : accent }}
+                    onPress={() => void handleBridgeUpdate({ defaultCwd: defaultCwdDraft.trim() })}
+                    disabled={defaultCwdDraft.trim() === bridgeConfig.defaultCwd}
+                  >
+                    <Text style={{ color: defaultCwdDraft.trim() === bridgeConfig.defaultCwd ? mutedForeground : primaryForeground }}>
+                      Save Working Directory
+                    </Text>
+                  </Pressable>
+                </View>
+
+                <View className="bg-muted rounded-2xl p-3.5 gap-1">
+                  <Text className="text-foreground text-[15px]">Latest Session ID</Text>
+                  <Text className="text-dimmed text-xs">
+                    {bridgeConfig.currentEvenAiSessionId || "None"}
+                  </Text>
+                </View>
+              </>
+            ) : null}
+          </>
+        )}
+      </SectionCard>
+
       <SectionCard title="Data">
         <Text className="text-foreground text-[15px]">Sessions: {sessions.length}</Text>
         <Pressable
@@ -190,7 +403,7 @@ export function SettingsScreen({ navigation }: Props): JSX.Element {
       <SectionCard title="App">
         <View className="flex-row items-center justify-between">
           <Text className="text-foreground text-[15px]">Version</Text>
-          <Text className="text-dimmed text-[15px]">0.1.1</Text>
+          <Text className="text-dimmed text-[15px]">0.2.1</Text>
         </View>
       </SectionCard>
     </ScrollView>

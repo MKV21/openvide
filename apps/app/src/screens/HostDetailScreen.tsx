@@ -41,8 +41,10 @@ export function HostDetailScreen({ route, navigation }: Props): JSX.Element {
   const [daemonInstallStatus, setDaemonInstallStatus] = useState<string>("");
   const readiness = readinessByTarget[targetId];
 
+  const isBridge = target?.connectionType === "bridge";
+
   const handleDetectTools = useCallback(async (): Promise<void> => {
-    if (detecting) return;
+    if (detecting || isBridge) return;
     setDetecting(true);
     try {
       await runCliDetection(targetId);
@@ -50,11 +52,11 @@ export function HostDetailScreen({ route, navigation }: Props): JSX.Element {
       // CLI detection failed — no-op
     }
     setDetecting(false);
-  }, [detecting, runCliDetection, targetId]);
+  }, [detecting, isBridge, runCliDetection, targetId]);
 
-  // Always auto-detect on mount to ensure fresh tool status
+  // Always auto-detect on mount to ensure fresh tool status (SSH hosts only)
   useEffect(() => {
-    if (!target) return;
+    if (!target || isBridge) return;
     if (!detecting) {
       void handleDetectTools();
     }
@@ -158,17 +160,26 @@ export function HostDetailScreen({ route, navigation }: Props): JSX.Element {
           <HostStatusDot status={target.lastStatus} loading={detecting} />
           <Text className="text-foreground font-bold text-lg">{target.label}</Text>
         </View>
-        <Text className="text-muted-foreground text-sm">
-          {target.username}@{target.host}:{target.port}
-        </Text>
-        <Text className="text-muted-foreground text-sm">Auth: {target.authMethod}</Text>
+        {isBridge ? (
+          <>
+            <Text className="text-muted-foreground text-sm">Bridge: {target.bridgeUrl}</Text>
+            <Text className="text-muted-foreground text-sm">Connection: Bridge (HTTPS)</Text>
+          </>
+        ) : (
+          <>
+            <Text className="text-muted-foreground text-sm">
+              {target.username}@{target.host}:{target.port}
+            </Text>
+            <Text className="text-muted-foreground text-sm">Auth: {target.authMethod}</Text>
+          </>
+        )}
         {target.lastStatusReason && (
           <Text className="text-warning text-[13px]">{target.lastStatusReason}</Text>
         )}
       </SectionCard>
 
-      {/* Daemon Status */}
-      <SectionCard title="Open Vide Daemon">
+      {/* Daemon Status — SSH hosts only */}
+      {!isBridge && <SectionCard title="Open Vide Daemon">
         <View className="flex-row items-center gap-3 bg-muted rounded-xl p-3">
           <Icon name="server" size={28} color={accent} />
           <View className="flex-1">
@@ -211,10 +222,10 @@ export function HostDetailScreen({ route, navigation }: Props): JSX.Element {
             {daemonCompatibilityReason ?? "Installed daemon version is not compatible. Update to continue."}
           </Text>
         )}
-      </SectionCard>
+      </SectionCard>}
 
-      {/* CLI Tools */}
-      <SectionCard title="CLI Tools">
+      {/* CLI Tools — SSH hosts only */}
+      {!isBridge && <SectionCard title="CLI Tools">
         {TOOLS.map((tool) => {
           const info = detectedTools?.[tool];
           const isInstalled = info?.installed === true;
@@ -249,10 +260,10 @@ export function HostDetailScreen({ route, navigation }: Props): JSX.Element {
             </View>
           );
         })}
-      </SectionCard>
+      </SectionCard>}
 
-      {/* Readiness Report */}
-      {readiness && (
+      {/* Readiness Report — SSH hosts only */}
+      {!isBridge && readiness && (
         <SectionCard title="Readiness Report">
           <StatePill value={readiness.readiness} />
           <Text className="text-muted-foreground text-sm">OS: {readiness.os} {readiness.distro} {readiness.distroVersion}</Text>
@@ -271,21 +282,23 @@ export function HostDetailScreen({ route, navigation }: Props): JSX.Element {
         </SectionCard>
       )}
 
-      {/* Quick Links */}
-      <View className="flex-row gap-3">
-        <Pressable
-          className="flex-1 bg-card border border-border rounded-2xl p-3.5 items-center active:opacity-80"
-          onPress={() => navigation.navigate("FileBrowser", { targetId })}
-        >
-          <Text className="text-accent font-semibold text-sm">Browse Files</Text>
-        </Pressable>
-        <Pressable
-          className="flex-1 bg-card border border-border rounded-2xl p-3.5 items-center active:opacity-80"
-          onPress={() => navigation.navigate("Terminal", { targetId })}
-        >
-          <Text className="text-accent font-semibold text-sm">Terminal</Text>
-        </Pressable>
-      </View>
+      {/* Quick Links — SSH hosts only (Terminal/FileBrowser need SSH) */}
+      {!isBridge && (
+        <View className="flex-row gap-3">
+          <Pressable
+            className="flex-1 bg-card border border-border rounded-2xl p-3.5 items-center active:opacity-80"
+            onPress={() => navigation.navigate("FileBrowser", { targetId })}
+          >
+            <Text className="text-accent font-semibold text-sm">Browse Files</Text>
+          </Pressable>
+          <Pressable
+            className="flex-1 bg-card border border-border rounded-2xl p-3.5 items-center active:opacity-80"
+            onPress={() => navigation.navigate("Terminal", { targetId })}
+          >
+            <Text className="text-accent font-semibold text-sm">Terminal</Text>
+          </Pressable>
+        </View>
+      )}
 
       {/* Delete */}
       <Pressable className="bg-error-bg rounded-2xl p-3.5 items-center" onPress={handleDelete}>

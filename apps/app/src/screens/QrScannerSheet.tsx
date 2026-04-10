@@ -2,7 +2,7 @@ import React, { useCallback, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { decodeQrPayload } from "../core/qrPayload";
+import { decodeQrPayload, type BridgeQrPayload, type QrConnectionPayload } from "../core/qrPayload";
 import type { RootStackParamList } from "../navigation/types";
 import { useThemeColors } from "../constants/colors";
 
@@ -26,7 +26,11 @@ export function QrScannerSheet({ navigation }: Props): JSX.Element {
       }
       scannedRef.current = true;
       navigation.goBack();
-      navigation.navigate("AddHostSheet", { qrPayload: payload });
+      if ("type" in payload && payload.type === "bridge") {
+        navigation.navigate("AddHostSheet", { bridgeQrPayload: payload as BridgeQrPayload });
+      } else {
+        navigation.navigate("AddHostSheet", { qrPayload: payload as QrConnectionPayload });
+      }
     },
     [navigation],
   );

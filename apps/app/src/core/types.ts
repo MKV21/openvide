@@ -1,4 +1,4 @@
-export type AuthMethod = "password" | "privateKey" | "privateKeyPassphrase";
+export type AuthMethod = "password" | "privateKey" | "privateKeyPassphrase" | "bridge";
 
 export type ToolName = "claude" | "codex" | "gemini";
 
@@ -35,6 +35,8 @@ export interface TargetProfile {
   host: string;
   port: number;
   username: string;
+  connectionType?: "ssh" | "bridge";
+  bridgeUrl?: string;
   tags: string[];
   authMethod: AuthMethod;
   lastStatus: "unknown" | "connected" | "failed";
@@ -119,6 +121,7 @@ export interface SshCredentials {
   password?: string;
   privateKey?: string;
   privateKeyPassphrase?: string;
+  bridgeToken?: string;
 }
 
 export interface DetectedToolInfo {

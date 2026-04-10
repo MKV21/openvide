@@ -1,13 +1,16 @@
-import { ensureDaemon, isDaemonRunning, stopDaemon } from "./daemon.js";
+import * as os from "node:os";
+import { ensureDaemon, isDaemonRunning, stopDaemon, runDaemonMain } from "./daemon.js";
 import { sendCommand } from "./ipc.js";
 import { readOutputLines, tailOutput } from "./outputStore.js";
 import { loadState } from "./stateStore.js";
 import { generateKeyPair } from "./keygen.js";
 import { encodeQR } from "./qrText.js";
 import { tryCacheClaudeAuth } from "./authCache.js";
-import type { IpcResponse, Tool } from "./types.js";
+import { generateDeployScaffold, type DeployProxy } from "./deployScaffold.js";
+import { runDeployDoctor, runDeploySetup } from "./deployManager.js";
+import type { IpcRequest, IpcResponse, Tool } from "./types.js";
 
-const DAEMON_VERSION = "0.1.7";
+const DAEMON_VERSION = "0.2.0";
 const LONG_IPC_TIMEOUT_MS = 60000;
 
 function usage(): never {
@@ -15,6 +18,7 @@ function usage(): never {
 
 Usage:
   openvide-daemon version
+  openvide-daemon run
   openvide-daemon health
   openvide-daemon session create --tool <claude|codex|gemini> --cwd <path> [--model <model>] [--auto-accept] [--conversation-id <id>]
   openvide-daemon session send --id <id> --prompt <prompt>
@@ -30,6 +34,22 @@ Usage:
   openvide-daemon session remove --id <id>
   openvide-daemon model list --tool <codex>
   openvide-daemon config set-push-token --token <token>
+  openvide-daemon bridge enable [--port 7842] [--no-tls]
+  openvide-daemon bridge disable
+  openvide-daemon bridge status
+  openvide-daemon bridge token [--expire 24h]
+  openvide-daemon bridge revoke --jti <jti>
+  openvide-daemon bridge qr [--expire 24h] [--host <host>]
+  openvide-daemon bridge config [--bind-host <host>] [--default-cwd <path>] [--even-ai-tool claude|codex] [--even-ai-mode new|last|pinned] [--even-ai-pin-session <id>]
+  openvide-daemon deploy scaffold [--proxy caddy|nginx|none] [--domain <domain>] [--public-origin <origin>] [--email <email>] [--output <dir>] [--service-name <name>] [--daemon-user <user>] [--bridge-port <n>] [--bind-host <host>] [--default-cwd <path>] [--even-ai-tool claude|codex] [--even-ai-mode new|last|pinned]
+  openvide-daemon deploy doctor [--proxy caddy|nginx|none] [--domain <domain>] [--public-origin <origin>] [--output <dir>] [--service-name <name>] [--daemon-user <user>] [--bridge-port <n>] [--bind-host <host>] [--default-cwd <path>] [--even-ai-tool claude|codex] [--even-ai-mode new|last|pinned]
+  openvide-daemon deploy setup [--proxy caddy|nginx|none] [--domain <domain>] [--public-origin <origin>] [--email <email>] [--output <dir>] [--service-name <name>] [--daemon-user <user>] [--bridge-port <n>] [--bind-host <host>] [--default-cwd <path>] [--even-ai-tool claude|codex] [--even-ai-mode new|last|pinned] [--issue-token] [--token-expire 24h] [--dry-run]
+  openvide-daemon schedule list
+  openvide-daemon schedule get --id <id>
+  openvide-daemon schedule create --name <name> --schedule <cron> [--project <name>] [--enabled true|false] (--target-json <json> | (--target-kind prompt --tool <claude|codex|gemini> --cwd <path> --prompt <text> [--model <model>] [--mode <mode>]) | (--target-kind team --team-id <id> --prompt <text> [--to <member|*>]))
+  openvide-daemon schedule update --id <id> [--name <name>] [--schedule <cron>] [--project <name>] [--enabled true|false] [--target-json <json>]
+  openvide-daemon schedule delete --id <id>
+  openvide-daemon schedule run --task-id <id>
   openvide-daemon keygen [--comment <c>] [--host <h>] [--port <p>] [--username <u>]
   openvide-daemon stop`);
   process.exit(1);
@@ -62,6 +82,56 @@ function failJson(error: string): never {
   process.exit(1);
 }
 
+function parseJsonFlag<T>(raw: string, label: string): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    failJson(`${label} must be valid JSON`);
+  }
+}
+
+function parseBooleanFlag(raw: string | undefined, label: string): boolean | undefined {
+  if (raw == null) return undefined;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  failJson(`${label} must be true or false`);
+}
+
+function buildScheduleTarget(flags: Map<string, string>): Record<string, unknown> {
+  const targetJson = flags.get("target-json");
+  if (targetJson) {
+    return parseJsonFlag<Record<string, unknown>>(targetJson, "--target-json");
+  }
+
+  const kind = flags.get("target-kind") ?? "prompt";
+  const prompt = flags.get("prompt");
+  if (!prompt) failJson("--prompt is required");
+
+  if (kind === "team") {
+    const teamId = flags.get("team-id");
+    if (!teamId) failJson("--team-id is required for team schedules");
+    return {
+      kind: "team",
+      teamId,
+      prompt,
+      to: flags.get("to") ?? "*",
+    };
+  }
+
+  if (kind !== "prompt") failJson("--target-kind must be prompt or team");
+  const tool = flags.get("tool");
+  const cwd = flags.get("cwd");
+  if (!tool || !cwd) failJson("--tool and --cwd are required for prompt schedules");
+  return {
+    kind: "prompt",
+    tool,
+    cwd,
+    prompt,
+    model: flags.get("model"),
+    mode: flags.get("mode"),
+  };
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length === 0) usage();
@@ -76,6 +146,12 @@ async function main(): Promise<void> {
   // ── version ──
   if (command === "version") {
     printJson({ ok: true, version: DAEMON_VERSION });
+    return;
+  }
+
+  // ── run (foreground daemon, for systemd/managed services) ──
+  if (command === "run") {
+    runDaemonMain();
     return;
   }
 
@@ -166,6 +242,195 @@ async function main(): Promise<void> {
 
       default:
         failJson(`Unknown config subcommand: ${sub}`);
+    }
+  }
+
+  // ── bridge subcommands ──
+  if (command === "bridge") {
+    const sub = args[1];
+    if (!sub) failJson("Missing bridge subcommand");
+
+    const flags = parseArgs(args.slice(2));
+
+    switch (sub) {
+      case "enable": {
+        ensureDaemon();
+        const portStr = flags.get("port");
+        const port = portStr ? parseInt(portStr, 10) : 7842;
+        const tls = !flags.has("no-tls");
+        const res = await sendCommand({ cmd: "bridge.enable", port, tls });
+        printJson(res);
+
+        if (res.ok) {
+          process.stderr.write(`Bridge started on port ${port}${tls ? " (TLS)" : " (plain HTTP)"}\n`);
+        }
+        return;
+      }
+
+      case "disable": {
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "bridge.disable" });
+        printJson(res);
+        if (res.ok) {
+          process.stderr.write("Bridge disabled\n");
+        }
+        return;
+      }
+
+      case "status": {
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "bridge.status" });
+        printJson(res);
+        return;
+      }
+
+      case "token": {
+        ensureDaemon();
+        const expire = flags.get("expire") ?? "24h";
+        const res = await sendCommand({ cmd: "bridge.token.create", expire });
+        printJson(res);
+        if (res.ok && res.bridgeToken) {
+          process.stderr.write(`Token: ${res.bridgeToken}\n`);
+          if (res.bridgeUrl) {
+            process.stderr.write(`URL: ${res.bridgeUrl}\n`);
+          }
+        }
+        return;
+      }
+
+      case "revoke": {
+        const jti = flags.get("jti");
+        if (!jti) failJson("--jti is required");
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "bridge.token.revoke", jti });
+        printJson(res);
+        return;
+      }
+
+      case "qr": {
+        ensureDaemon();
+        const expire = flags.get("expire") ?? "24h";
+        const host = flags.get("host");
+        const res = await sendCommand({ cmd: "bridge.qr", expire, host });
+        printJson(res);
+
+        if (res.ok && res.qrLines) {
+          for (const line of res.qrLines) {
+            process.stderr.write(line + "\n");
+          }
+          if (res.bridgeUrl) {
+            process.stderr.write(`\nURL: ${res.bridgeUrl}\n`);
+          }
+          process.stderr.write("Scan the QR code above with the Even glasses app to connect.\n\n");
+        }
+        return;
+      }
+
+      case "config": {
+        ensureDaemon();
+        const configReq: IpcRequest = { cmd: "bridge.config" };
+        const bindHost = flags.get("bind-host");
+        if (bindHost) (configReq as Record<string, unknown>).bindHost = bindHost;
+        const defaultCwd = flags.get("default-cwd");
+        if (defaultCwd) (configReq as Record<string, unknown>).defaultCwd = defaultCwd;
+        const evenAiTool = flags.get("even-ai-tool");
+        if (evenAiTool) (configReq as Record<string, unknown>).evenAiTool = evenAiTool;
+        const evenAiMode = flags.get("even-ai-mode");
+        if (evenAiMode) (configReq as Record<string, unknown>).evenAiMode = evenAiMode;
+        const pinSession = flags.get("even-ai-pin-session");
+        if (pinSession) (configReq as Record<string, unknown>).evenAiPinnedSessionId = pinSession;
+        const res = await sendCommand(configReq);
+        printJson(res);
+        return;
+      }
+
+      default:
+        failJson(`Unknown bridge subcommand: ${sub}`);
+    }
+  }
+
+  // ── deploy subcommands ──
+  if (command === "deploy") {
+    const sub = args[1];
+    if (!sub) failJson("Missing deploy subcommand");
+
+    const flags = parseArgs(args.slice(2));
+
+    const proxyRaw = flags.get("proxy") ?? "caddy";
+    if (proxyRaw !== "caddy" && proxyRaw !== "nginx" && proxyRaw !== "none") {
+      failJson("--proxy must be caddy, nginx, or none");
+    }
+    const proxy = proxyRaw as DeployProxy;
+    const domain = flags.get("domain");
+    const publicOrigin = flags.get("public-origin");
+    if (proxy !== "none" && !domain && !publicOrigin) {
+      failJson("--domain is required for caddy/nginx modes unless --public-origin is set");
+    }
+    const outputDir = flags.get("output") ?? "./openvide-deploy";
+    const serviceName = flags.get("service-name") ?? "openvide-daemon";
+    const daemonUser = flags.get("daemon-user") ?? os.userInfo().username;
+    const bridgePortRaw = flags.get("bridge-port");
+    const bridgePort = bridgePortRaw ? parseInt(bridgePortRaw, 10) : 7842;
+    if (!Number.isFinite(bridgePort) || bridgePort <= 0) {
+      failJson("--bridge-port must be a positive integer");
+    }
+    const bindHost = flags.get("bind-host")
+      ?? (proxy === "none" ? "::" : "127.0.0.1");
+    const evenAiTool = flags.get("even-ai-tool");
+    if (evenAiTool && evenAiTool !== "claude" && evenAiTool !== "codex") {
+      failJson("--even-ai-tool must be claude or codex");
+    }
+    const evenAiMode = flags.get("even-ai-mode");
+    if (evenAiMode && evenAiMode !== "new" && evenAiMode !== "last" && evenAiMode !== "pinned") {
+      failJson("--even-ai-mode must be new, last, or pinned");
+    }
+
+    const commonOpts = {
+      outputDir,
+      domain,
+      publicOrigin,
+      email: flags.get("email"),
+      proxy,
+      serviceName,
+      daemonUser,
+      bridgePort,
+      bindHost,
+      defaultCwd: flags.get("default-cwd"),
+      evenAiTool: evenAiTool as "claude" | "codex" | undefined,
+      evenAiMode: evenAiMode as "new" | "last" | "pinned" | undefined,
+    };
+
+    switch (sub) {
+      case "scaffold": {
+        const result = generateDeployScaffold(commonOpts);
+
+        printJson({
+          ok: true,
+          rootDir: result.rootDir,
+          files: result.files,
+        });
+        return;
+      }
+
+      case "doctor": {
+        const result = await runDeployDoctor(commonOpts);
+        printJson({ ok: result.ok, rootDir: result.rootDir, publicOrigin: result.publicOrigin, checks: result.checks });
+        return;
+      }
+
+      case "setup": {
+        const result = runDeploySetup({
+          ...commonOpts,
+          dryRun: flags.has("dry-run"),
+          issueToken: flags.has("issue-token"),
+          tokenExpire: flags.get("token-expire") ?? "24h",
+        });
+        printJson({ ok: true, ...result });
+        return;
+      }
+
+      default:
+        failJson(`Unknown deploy subcommand: ${sub}`);
     }
   }
 
@@ -371,8 +636,103 @@ async function main(): Promise<void> {
         return;
       }
 
+      case "remote": {
+        const id = flags.get("id");
+        if (!id) {
+          failJson("--id is required");
+        }
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "session.remote", id }, LONG_IPC_TIMEOUT_MS);
+        printJson(res);
+        return;
+      }
+
       default:
         failJson(`Unknown session subcommand: ${sub}`);
+    }
+  }
+
+  // ── schedule subcommands ──
+  if (command === "schedule") {
+    const sub = args[1];
+    if (!sub) failJson("Missing schedule subcommand");
+
+    const flags = parseArgs(args.slice(2));
+
+    switch (sub) {
+      case "list": {
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "schedule.list" }, LONG_IPC_TIMEOUT_MS);
+        printJson(res);
+        return;
+      }
+
+      case "get": {
+        const id = flags.get("id");
+        if (!id) failJson("--id is required");
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "schedule.get", id }, LONG_IPC_TIMEOUT_MS);
+        printJson(res);
+        return;
+      }
+
+      case "create": {
+        const name = flags.get("name");
+        const schedule = flags.get("schedule");
+        if (!name || !schedule) failJson("--name and --schedule are required");
+        const target = buildScheduleTarget(flags);
+        const enabled = parseBooleanFlag(flags.get("enabled"), "--enabled");
+        ensureDaemon();
+        const res = await sendCommand({
+          cmd: "schedule.create",
+          name,
+          schedule,
+          project: flags.get("project"),
+          enabled,
+          target,
+        }, LONG_IPC_TIMEOUT_MS);
+        printJson(res);
+        return;
+      }
+
+      case "update": {
+        const id = flags.get("id");
+        if (!id) failJson("--id is required");
+        const req: IpcRequest = { cmd: "schedule.update", id };
+        if (flags.has("name")) req.name = flags.get("name");
+        if (flags.has("schedule")) req.schedule = flags.get("schedule");
+        if (flags.has("project")) req.project = flags.get("project");
+        const enabled = parseBooleanFlag(flags.get("enabled"), "--enabled");
+        if (enabled !== undefined) req.enabled = enabled;
+        if (flags.has("target-json") || flags.has("target-kind")) {
+          req.target = buildScheduleTarget(flags);
+        }
+        ensureDaemon();
+        const res = await sendCommand(req, LONG_IPC_TIMEOUT_MS);
+        printJson(res);
+        return;
+      }
+
+      case "delete": {
+        const id = flags.get("id");
+        if (!id) failJson("--id is required");
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "schedule.delete", id }, LONG_IPC_TIMEOUT_MS);
+        printJson(res);
+        return;
+      }
+
+      case "run": {
+        const taskId = flags.get("task-id");
+        if (!taskId) failJson("--task-id is required");
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "schedule.run", taskId }, LONG_IPC_TIMEOUT_MS);
+        printJson(res);
+        return;
+      }
+
+      default:
+        failJson(`Unknown schedule subcommand: ${sub}`);
     }
   }
 
@@ -396,6 +756,305 @@ async function main(): Promise<void> {
 
       default:
         failJson(`Unknown model subcommand: ${sub}`);
+    }
+  }
+
+  // ── team subcommands ──
+  if (command === "team") {
+    const sub = args[1];
+    if (!sub) failJson("Missing team subcommand");
+
+    const flags = parseArgs(args.slice(2));
+
+    switch (sub) {
+      case "create": {
+        const name = flags.get("name");
+        const cwd = flags.get("cwd");
+        const membersJson = flags.get("members");
+        if (!name || !cwd || !membersJson) failJson("--name, --cwd, and --members are required");
+        let members: unknown[];
+        try { members = JSON.parse(membersJson); } catch { failJson("--members must be valid JSON array"); return; }
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "team.create", name, cwd, members }, LONG_IPC_TIMEOUT_MS);
+        printJson(res);
+        return;
+      }
+
+      case "list": {
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "team.list" });
+        printJson(res);
+        return;
+      }
+
+      case "get": {
+        const teamId = flags.get("team-id") ?? flags.get("id");
+        if (!teamId) failJson("--id is required");
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "team.get", teamId });
+        printJson(res);
+        return;
+      }
+
+      case "update": {
+        const teamId = flags.get("team-id") ?? flags.get("id");
+        if (!teamId) failJson("--id is required");
+        const req: IpcRequest = { cmd: "team.update", teamId };
+        if (flags.has("name")) (req as Record<string, unknown>).name = flags.get("name");
+        if (flags.has("cwd")) (req as Record<string, unknown>).cwd = flags.get("cwd");
+        if (flags.has("members")) {
+          try {
+            (req as Record<string, unknown>).members = JSON.parse(flags.get("members")!);
+          } catch {
+            failJson("--members must be valid JSON array");
+          }
+        }
+        ensureDaemon();
+        const res = await sendCommand(req, LONG_IPC_TIMEOUT_MS);
+        printJson(res);
+        return;
+      }
+
+      case "delete": {
+        const teamId = flags.get("team-id") ?? flags.get("id");
+        if (!teamId) failJson("--id is required");
+        ensureDaemon();
+        const res = await sendCommand({ cmd: "team.delete", teamId });
+        printJson(res);
+        return;
+      }
+
+      case "task": {
+        const taskSub = args[2];
+        if (!taskSub) failJson("Missing team task subcommand");
+        const taskFlags = parseArgs(args.slice(3));
+
+        switch (taskSub) {
+          case "create": {
+            const teamId = taskFlags.get("team-id");
+            const subject = taskFlags.get("subject");
+            const owner = taskFlags.get("owner");
+            if (!teamId || !subject || !owner) failJson("--team-id, --subject, and --owner are required");
+            ensureDaemon();
+            const res = await sendCommand({
+              cmd: "team.task.create",
+              teamId,
+              subject,
+              description: taskFlags.get("description") ?? "",
+              owner,
+              dependencies: taskFlags.get("dependencies") ? JSON.parse(taskFlags.get("dependencies")!) : undefined,
+            });
+            printJson(res);
+            return;
+          }
+
+          case "list": {
+            const teamId = taskFlags.get("team-id");
+            if (!teamId) failJson("--team-id is required");
+            ensureDaemon();
+            const res = await sendCommand({ cmd: "team.task.list", teamId });
+            printJson(res);
+            return;
+          }
+
+          case "update": {
+            const teamId = taskFlags.get("team-id");
+            const taskId = taskFlags.get("task-id");
+            if (!teamId || !taskId) failJson("--team-id and --task-id are required");
+            ensureDaemon();
+            const req: IpcRequest = { cmd: "team.task.update", teamId, taskId };
+            if (taskFlags.has("status")) (req as Record<string, unknown>).status = taskFlags.get("status");
+            if (taskFlags.has("owner")) (req as Record<string, unknown>).owner = taskFlags.get("owner");
+            const res = await sendCommand(req);
+            printJson(res);
+            return;
+          }
+
+          case "comment": {
+            const teamId = taskFlags.get("team-id");
+            const taskId = taskFlags.get("task-id");
+            const text = taskFlags.get("text");
+            if (!teamId || !taskId || !text) failJson("--team-id, --task-id, and --text are required");
+            ensureDaemon();
+            const res = await sendCommand({
+              cmd: "team.task.comment",
+              teamId,
+              taskId,
+              author: taskFlags.get("author") ?? "user",
+              text,
+            });
+            printJson(res);
+            return;
+          }
+
+          default:
+            failJson(`Unknown team task subcommand: ${taskSub}`);
+        }
+        return;
+      }
+
+      case "message": {
+        const msgSub = args[2];
+        if (!msgSub) failJson("Missing team message subcommand");
+        const msgFlags = parseArgs(args.slice(3));
+
+        switch (msgSub) {
+          case "send": {
+            const teamId = msgFlags.get("team-id");
+            const text = msgFlags.get("text");
+            if (!teamId || !text) failJson("--team-id and --text are required");
+            ensureDaemon();
+            const res = await sendCommand({
+              cmd: "team.message.send",
+              teamId,
+              from: msgFlags.get("from") ?? "user",
+              to: msgFlags.get("to") ?? "*",
+              text,
+            });
+            printJson(res);
+            return;
+          }
+
+          case "list": {
+            const teamId = msgFlags.get("team-id");
+            if (!teamId) failJson("--team-id is required");
+            ensureDaemon();
+            const limitRaw = msgFlags.get("limit");
+            const res = await sendCommand({
+              cmd: "team.message.list",
+              teamId,
+              limit: limitRaw ? parseInt(limitRaw, 10) : undefined,
+            });
+            printJson(res);
+            return;
+          }
+
+          default:
+            failJson(`Unknown team message subcommand: ${msgSub}`);
+        }
+        return;
+      }
+
+      case "plan": {
+        const planSub = args[2];
+        if (!planSub) failJson("Missing team plan subcommand");
+        const planFlags = parseArgs(args.slice(3));
+
+        switch (planSub) {
+          case "submit": {
+            const teamId = planFlags.get("team-id");
+            const planJson = planFlags.get("plan")
+              ?? (planFlags.get("tasks") ? JSON.stringify({ tasks: parseJsonFlag<unknown[]>(planFlags.get("tasks")!, "--tasks") }) : undefined);
+            if (!teamId || !planJson) failJson("--team-id and --plan are required");
+            let plan: { tasks: unknown[] };
+            try { plan = JSON.parse(planJson); } catch { failJson("--plan must be valid JSON"); return; }
+            ensureDaemon();
+            const res = await sendCommand({
+              cmd: "team.plan.submit",
+              teamId,
+              plan,
+              createdBy: planFlags.get("created-by") ?? "user",
+              mode: planFlags.get("mode"),
+              reviewers: planFlags.get("reviewers") ? JSON.parse(planFlags.get("reviewers")!) : undefined,
+              maxIterations: planFlags.has("max-iterations") ? parseInt(planFlags.get("max-iterations")!, 10) : undefined,
+            }, LONG_IPC_TIMEOUT_MS);
+            printJson(res);
+            return;
+          }
+
+          case "revise": {
+            const teamId = planFlags.get("team-id");
+            const planId = planFlags.get("plan-id");
+            const revisionJson = planFlags.get("revision");
+            const author = planFlags.get("author") ?? "user";
+            if (!teamId || !planId || !revisionJson) failJson("--team-id, --plan-id, and --revision are required");
+            let revision: { tasks: unknown[] };
+            try { revision = JSON.parse(revisionJson); } catch { failJson("--revision must be valid JSON"); return; }
+            ensureDaemon();
+            const res = await sendCommand({
+              cmd: "team.plan.revise",
+              teamId,
+              planId,
+              author,
+              revision,
+            }, LONG_IPC_TIMEOUT_MS);
+            printJson(res);
+            return;
+          }
+
+          case "generate": {
+            const teamId = planFlags.get("team-id");
+            const request = planFlags.get("request");
+            if (!teamId || !request) failJson("--team-id and --request are required");
+            ensureDaemon();
+            const res = await sendCommand({
+              cmd: "team.plan.generate",
+              teamId,
+              request,
+              mode: planFlags.get("mode"),
+              reviewers: planFlags.get("reviewers") ? JSON.parse(planFlags.get("reviewers")!) : undefined,
+              maxIterations: planFlags.has("max-iterations") ? parseInt(planFlags.get("max-iterations")!, 10) : undefined,
+            }, LONG_IPC_TIMEOUT_MS);
+            printJson(res);
+            return;
+          }
+
+          case "review": {
+            const teamId = planFlags.get("team-id");
+            const planId = planFlags.get("plan-id");
+            const vote = planFlags.get("vote");
+            const reviewer = planFlags.get("reviewer");
+            if (!teamId || !planId || !vote || !reviewer) failJson("--team-id, --plan-id, --reviewer, and --vote are required");
+            ensureDaemon();
+            const res = await sendCommand({
+              cmd: "team.plan.review",
+              teamId,
+              planId,
+              reviewer,
+              vote,
+              feedback: planFlags.get("feedback"),
+            });
+            printJson(res);
+            return;
+          }
+
+          case "get": {
+            const teamId = planFlags.get("team-id");
+            const planId = planFlags.get("plan-id");
+            if (!teamId || !planId) failJson("--team-id and --plan-id are required");
+            ensureDaemon();
+            const res = await sendCommand({ cmd: "team.plan.get", teamId, planId });
+            printJson(res);
+            return;
+          }
+
+          case "latest": {
+            const teamId = planFlags.get("team-id");
+            if (!teamId) failJson("--team-id is required");
+            ensureDaemon();
+            const res = await sendCommand({ cmd: "team.plan.latest", teamId });
+            printJson(res);
+            return;
+          }
+
+          case "delete": {
+            const teamId = planFlags.get("team-id");
+            const planId = planFlags.get("plan-id");
+            if (!teamId || !planId) failJson("--team-id and --plan-id are required");
+            ensureDaemon();
+            const res = await sendCommand({ cmd: "team.plan.delete", teamId, planId });
+            printJson(res);
+            return;
+          }
+
+          default:
+            failJson(`Unknown team plan subcommand: ${planSub}`);
+        }
+        return;
+      }
+
+      default:
+        failJson(`Unknown team subcommand: ${sub}`);
     }
   }
 
