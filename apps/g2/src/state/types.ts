@@ -39,6 +39,11 @@ export interface SessionSummary {
   lastError?: string;
   updatedAt: string;
   outputLines: number;
+  origin?: 'daemon' | 'native';
+  resumeId?: string;
+  title?: string;
+  summary?: string;
+  messageCount?: number;
 }
 
 // ── File Browser Types ──
@@ -89,6 +94,13 @@ export interface Prompt {
   label: string;
   prompt: string;
   isBuiltIn: boolean;
+}
+
+export interface SuggestedPrompt {
+  id: string;
+  label: string;
+  prompt: string;
+  source: 'ai' | 'heuristic';
 }
 
 // ── Port Types (Phase 7) ──

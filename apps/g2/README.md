@@ -4,16 +4,18 @@
 
 `open-vide-g2` is the browser/webview/glasses client for OpenVide.
 
+Its canonical home is now this monorepo workspace at `apps/g2`.
+
 This repo is the UI layer:
 
 - browser/webview app
 - glasses UI
 - Even Hub / Even AI oriented settings and flows
 
-The canonical backend is **not** this repo. Production should point to the shared global `openvide-daemon` from the main OpenVide repository:
+The canonical backend is the shared `openvide-daemon` in this monorepo:
 
-- main repo: `../tools/openvide`
-- canonical daemon: `../tools/openvide/apps/daemon`
+- monorepo root: `openvide/`
+- canonical daemon: `apps/daemon`
 
 If you are publishing or deploying this client, read the main OpenVide README first:
 
@@ -41,9 +43,17 @@ Do not globally link `open-vide-g2/daemon` as your production daemon. The suppor
 
 ## Quick Start
 
+From the monorepo root:
+
 ```bash
-cd open-vide-g2
 yarn install
+yarn g2:dev
+```
+
+Or from this workspace directly:
+
+```bash
+cd apps/g2
 yarn dev
 ```
 
@@ -54,7 +64,7 @@ The app expects a reachable `openvide-daemon` bridge host.
 On the machine running the canonical daemon:
 
 ```bash
-cd ../tools/openvide/apps/daemon
+cd apps/daemon
 npm install -g .
 openvide-daemon health
 openvide-daemon bridge enable --port 7842
@@ -84,7 +94,7 @@ If you only want the files without touching the machine:
 openvide-daemon deploy scaffold --proxy caddy --domain openvide.example.com --output ./openvide-deploy
 ```
 
-Then in `open-vide-g2`:
+Then in `apps/g2`:
 
 1. Open `Hosts`
 2. Add the daemon bridge URL

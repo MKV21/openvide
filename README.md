@@ -20,9 +20,10 @@
 
 ## Overview
 
-This repository is the canonical OpenVide backend and mobile app:
+This repository is the canonical OpenVide backend and client monorepo:
 
 - `apps/app`: the React Native app
+- `apps/g2`: the browser/webview/glasses client for Even Hub / Even Realities G2
 - `apps/daemon`: the globally installed `openvide-daemon`
 
 The daemon is the source of truth for:
@@ -53,6 +54,7 @@ openvide/
   apps/
     app/              Expo / React Native app
     daemon/           openvide-daemon (canonical shared backend)
+    g2/               webview / glasses client
     bridge/           legacy bridge package artifacts; bridge now lives in daemon
   docs/
 ```
@@ -75,7 +77,7 @@ RN app
 Browser or webview
   -> HTTPS + WebSocket bridge
   -> openvide-daemon
-  -> daemon-managed Claude/Codex process
+  -> daemon-managed Claude/Codex/Gemini process
 ```
 
 ### Even AI path
@@ -179,6 +181,22 @@ yarn build:preview
 yarn build:prod
 yarn update:preview
 yarn update:prod
+```
+
+### Build the G2 webview / glasses client
+
+From the repo root:
+
+```bash
+yarn g2:dev
+yarn g2:build
+```
+
+Or from the workspace directly:
+
+```bash
+cd apps/g2
+yarn dev
 ```
 
 ## RN App Setup

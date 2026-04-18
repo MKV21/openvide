@@ -29,6 +29,7 @@ interface TeamInfo {
 const TOOLS = [
   { value: 'claude', label: 'Claude' },
   { value: 'codex', label: 'Codex' },
+  { value: 'gemini', label: 'Gemini' },
 ];
 
 const ROLES = [

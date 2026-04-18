@@ -6,15 +6,22 @@ export function usePrompts() {
   return useQuery<Prompt[]>({
     queryKey: ['prompts'],
     queryFn: async () => {
-      try {
-        const res = await rpc('prompt.list');
-        if (res.ok && Array.isArray(res.prompts)) {
-          return res.prompts as Prompt[];
-        }
-      } catch { /* ignore */ }
-      return [];
+      // Throw on any failure so React Query's retry machinery kicks in —
+      // previously we swallowed errors and cached [] for 30s, which meant the
+      // prompts list stayed empty after a refresh if the bridge hadn't yet
+      // reconnected on first render.
+      const res = await rpc('prompt.list');
+      if (!res.ok || !Array.isArray(res.prompts)) {
+        throw new Error(typeof res.error === 'string' ? res.error : 'prompt.list failed');
+      }
+      return res.prompts as Prompt[];
     },
-    staleTime: 30000,
+    staleTime: 5_000,
+    retry: 5,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
+    refetchOnReconnect: true,
   });
 }
 

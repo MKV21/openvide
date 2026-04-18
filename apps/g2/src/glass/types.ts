@@ -9,6 +9,7 @@ import type {
   ScheduledTask,
   DiffFile,
   Prompt,
+  SuggestedPrompt,
   PortEntry,
   ActionResult,
   FsEntry,
@@ -24,6 +25,7 @@ export interface OpenVideSnapshot {
   selectedSessionId: string | null;
   selectedSessionMode: string;
   selectedSessionModel: string;
+  selectedSessionReadNavIndex: number | null;
   selectedWorkspace: string | null;
   selectedWorkspaceHostId: string | null;
   outputLines: string[];
@@ -52,6 +54,7 @@ export interface OpenVideSnapshot {
   browserEntries: FsEntry[];
   diffFiles: DiffFile[];
   prompts: Prompt[];
+  suggestedPrompts: SuggestedPrompt[];
   ports: PortEntry[];
   pendingResult: ActionResult | null;
 }
@@ -62,6 +65,7 @@ export interface OpenVideActions {
   switchHost: (hostId: string) => void;
   setSessionMode: (mode: string) => void;
   setSessionModel: (model: string) => void;
+  setSessionReadNavIndex: (highlightedIndex: number | null) => void;
   startVoice: () => void;
   stopVoice: () => void;
   submitVoice: (prompt: string) => Promise<void>;

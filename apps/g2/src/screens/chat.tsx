@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
+import { useDrawerHeader, Button } from 'even-toolkit/web';
+import { IcChevronBack } from 'even-toolkit/web/icons/svg-icons';
 import { useSessionStream } from '../hooks/use-session-stream';
 import { useSessions } from '../hooks/use-sessions';
 import { useModels } from '../hooks/use-models';
@@ -14,7 +16,7 @@ import { ChatInput } from '../components/chat/chat-input';
 import { CodeBlock } from '../components/chat/code-block';
 import { ThinkingBlock } from '../components/chat/thinking-block';
 import { ToolUseCard } from '../components/chat/tool-use-card';
-import { Toolbar } from '../components/chat/toolbar';
+import { IcEditSettings, IcFeatInterfaceSettings } from 'even-toolkit/web/icons/svg-icons';
 import type { ChatMessage } from '../types';
 
 /* ── Thinking label (cycles verbs like Claude Code) ── */
@@ -159,6 +161,26 @@ export function ChatRoute() {
 
   const session = sessions?.find((s) => s.id === sessionId);
   const toolName = session?.tool ?? 'Session';
+  // Only user-configured prompts — built-in library entries are hidden.
+  const customPrompts = (prompts ?? []).filter((p) => !p.isBuiltIn);
+
+  // Force nav back to /sessions (or /workspace) with replace semantics so the
+  // forward history (which would otherwise point back to /chat) is truncated.
+  const backTarget = session?.workingDirectory
+    ? `/workspace?path=${encodeURIComponent(session.workingDirectory)}${session.hostId ? `&hostId=${session.hostId}` : ''}`
+    : '/sessions';
+  useDrawerHeader({
+    title: t('web.chat') ?? 'Chat',
+    left: (
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => navigate(backTarget, { replace: true })}
+      >
+        <IcChevronBack width={18} height={18} />
+      </Button>
+    ),
+  });
   const dirName = session?.workingDirectory?.split('/').pop() ?? '';
   const providerColor = getProviderColor(session?.tool);
   const isRunning = session?.status === 'running';
@@ -171,11 +193,18 @@ export function ChatRoute() {
     messages.length > 1 && lastContent.trim().endsWith('?');
 
   const [input, setInput] = useState('');
-  const [autoScroll, setAutoScroll] = useState(true);
   const [showPromptPicker, setShowPromptPicker] = useState(false);
   const [selectedMode, setSelectedMode] = useState('auto');
   const [selectedModel, setSelectedModel] = useState(session?.model ?? '');
+  const [pendingUserMsg, setPendingUserMsg] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const el = messagesRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
 
   // Model options filtered by tool
   const toolModels: Record<string, { id: string; label: string }[]> = {
@@ -201,21 +230,16 @@ export function ChatRoute() {
   // Context percentage estimate (based on message count)
   const contextPercent = messages.length > 0 ? Math.min(Math.round((messages.length / 100) * 100), 99) : 0;
 
-  // Auto-scroll
+  // Always scroll to the latest message — both on session change and on any
+  // new incoming content. The user explicitly wants the view pinned to the end.
   useEffect(() => {
-    if (autoScroll && messagesRef.current) {
-      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
-    }
-  }, [messages, autoScroll]);
+    requestAnimationFrame(() => scrollToLatest('auto'));
+  }, [messages, pendingUserMsg, sessionId, scrollToLatest]);
 
   const handleScroll = useCallback(() => {
-    if (!messagesRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = messagesRef.current;
-    setAutoScroll(scrollHeight - scrollTop - clientHeight < 50);
+    // Intentional no-op: the chat view is always pinned to the latest message.
+    // The "Jump to latest" helper button is gone for the same reason.
   }, []);
-
-  // Optimistic user messages: shown immediately before stream delivers them
-  const [pendingUserMsg, setPendingUserMsg] = useState<string | null>(null);
 
   // Clear pending msg when stream delivers a user message
   useEffect(() => {
@@ -229,18 +253,31 @@ export function ChatRoute() {
     if (!text || !sessionId) return;
     setInput('');
     setPendingUserMsg(text);
+    scrollToLatest('auto');
     const opts: any = { sessionId, prompt: text };
     if (selectedMode !== 'auto') opts.mode = selectedMode;
     if (selectedModel && selectedModel !== session?.model) opts.model = selectedModel;
     sendPrompt.mutate(opts);
-  }, [input, sessionId, sendPrompt, selectedMode, selectedModel, session?.model]);
+  }, [input, scrollToLatest, selectedMode, selectedModel, sendPrompt, session?.model, sessionId]);
+
+  const sendQuickPrompt = useCallback((prompt: string) => {
+    if (!sessionId) return;
+    const text = prompt.trim();
+    if (!text) return;
+    setPendingUserMsg(text);
+    scrollToLatest('auto');
+    const opts: any = { sessionId, prompt: text };
+    if (selectedMode !== 'auto') opts.mode = selectedMode;
+    if (selectedModel && selectedModel !== session?.model) opts.model = selectedModel;
+    sendPrompt.mutate(opts);
+  }, [scrollToLatest, selectedMode, selectedModel, sendPrompt, session?.model, sessionId]);
 
   const handleCancel = useCallback(() => {
     if (sessionId) cancelSession.mutate(sessionId);
   }, [sessionId, cancelSession]);
 
   const handlePromptSelect = (prompt: string) => {
-    sendPrompt.mutate({ sessionId, prompt });
+    sendQuickPrompt(prompt);
     setShowPromptPicker(false);
   };
 
@@ -272,55 +309,68 @@ export function ChatRoute() {
       )}
 
       {/* ── Messages ── */}
-      <div
-        ref={messagesRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-4"
-      >
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center flex-1 text-center">
-            <div className="text-[24px] tracking-[-0.72px] opacity-30">{'\u{1F4AC}'}</div>
-            <div className="text-text-dim text-[13px] tracking-[-0.13px] mt-2">
-              {t('output.waiting') ?? 'Waiting for output...'}
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={messagesRef}
+          onScroll={handleScroll}
+          className="h-full overflow-y-auto px-3 pt-4 pb-3 flex flex-col gap-4"
+        >
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center flex-1 text-center">
+              <div className="text-[24px] tracking-[-0.72px] opacity-30">{'\u{1F4AC}'}</div>
+              <div className="text-text-dim text-[13px] tracking-[-0.13px] mt-2">
+                {t('output.waitingInput') ?? 'Waiting for input...'}
+              </div>
             </div>
-          </div>
-        ) : (
-          messages.map((msg: ChatMessage, i: number) => (
-            <ChatBubble
-              key={i}
-              role={msg.role}
-              tool={toolName}
-              timestamp={msg.timestamp}
-            >
-              {msg.thinking && <ThinkingBlock text={msg.thinking} />}
-              {renderContent(msg.content, showToolDetails)}
+          ) : (
+            messages.map((msg: ChatMessage, i: number) => (
+              <ChatBubble
+                key={i}
+                role={msg.role}
+                tool={toolName}
+                timestamp={msg.timestamp}
+              >
+                {msg.thinking && <ThinkingBlock text={msg.thinking} />}
+                {renderContent(msg.content, showToolDetails)}
+              </ChatBubble>
+            ))
+          )}
+
+          {/* Optimistic user message — shown immediately before stream delivers it */}
+          {pendingUserMsg && !messages.some((m) => m.role === 'user' && m.content.includes(pendingUserMsg.slice(0, 30))) && (
+            <ChatBubble role="user" tool={toolName}>
+              {pendingUserMsg}
             </ChatBubble>
-          ))
-        )}
+          )}
 
-        {/* Optimistic user message — shown immediately before stream delivers it */}
-        {pendingUserMsg && !messages.some((m) => m.role === 'user' && m.content.includes(pendingUserMsg.slice(0, 30))) && (
-          <ChatBubble role="user" tool={toolName}>
-            {pendingUserMsg}
-          </ChatBubble>
-        )}
+          {/* Thinking indicator — shows whenever the last message is the user's and
+              no assistant reply has arrived yet. This covers all three tools: Claude
+              (streams over time), Codex, and Gemini (respond in one shot), and also
+              the "writing in external CLI" case where the daemon status stays idle. */}
+          {(() => {
+            const lastMessage = messages[messages.length - 1];
+            const waitingForAssistant = pendingUserMsg != null
+              || (messages.length > 0 && lastMessage?.role === 'user');
+            if (!waitingForAssistant) return null;
+            return (
+              <div className="flex items-center gap-2 px-1 py-2">
+                <span className="text-accent text-[15px] tracking-[-0.15px] status-breathe">✽</span>
+                <ThinkingLabel />
+              </div>
+            );
+          })()}
 
-        {/* Thinking indicator — shows immediately on send, hides when assistant responds */}
-        {(pendingUserMsg || (isRunning && messages.length > 0 && messages[messages.length - 1]?.role === 'user')) && (
-          <div className="flex items-center gap-2 px-1 py-2">
-            <span className="text-accent text-[15px] tracking-[-0.15px] status-breathe">✽</span>
-            <ThinkingLabel />
-          </div>
-        )}
+          <div ref={messagesEndRef} />
 
-        {/* No "Generating" indicator — assistant content is visible as it streams */}
+          {/* No "Generating" indicator — assistant content is visible as it streams */}
+        </div>
       </div>
 
       {/* ── Prompt picker overlay ── */}
-      {showPromptPicker && prompts && prompts.length > 0 && (
+      {showPromptPicker && customPrompts.length > 0 && (
         <div className="shrink-0 px-3 pb-1">
           <div className="bg-surface border border-border rounded-[6px] p-2 flex flex-col gap-1.5">
-            {prompts.map((p) => (
+            {customPrompts.map((p) => (
               <div
                 key={p.id}
                 className="px-3 py-2 rounded-[6px] cursor-pointer hover:bg-bg text-[13px] tracking-[-0.13px] text-text card-hover"
@@ -336,28 +386,73 @@ export function ChatRoute() {
         </div>
       )}
 
-      {/* ── Toolbar ── */}
-      <Toolbar
-        mode={selectedMode}
-        onModeChange={setSelectedMode}
-        model={selectedModel || session?.model || ''}
-        onModelChange={setSelectedModel}
-        modes={modeItems}
-        models={modelItems}
-      />
-
-      {/* ── Input ── */}
-      <div className="shrink-0 px-3 pb-3">
-        <ChatInput
-          value={input}
-          onChange={setInput}
-          onSend={doSend}
-          onVoiceStart={() => {}}
-          onVoiceStop={isRunning ? handleCancel : undefined}
-          isListening={false}
-          isRunning={isRunning}
-          placeholder={t('web.sendMessage') ?? 'Type a message...'}
-        />
+      {/* ── Toolbar row (mode + model + quick prompts inline) + Input ── */}
+      <div className="shrink-0 bg-bg">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 overflow-x-auto">
+          {modeItems.length > 0 && (() => {
+            const currentMode = modeItems.find((m) => m.id === selectedMode);
+            const cycleMode = () => {
+              const idx = modeItems.findIndex((m) => m.id === selectedMode);
+              const next = modeItems[(idx + 1) % modeItems.length];
+              if (next) setSelectedMode(next.id);
+            };
+            return (
+              <button
+                type="button"
+                className="shrink-0 bg-surface rounded-[6px] border border-border px-3 h-8 flex items-center gap-1.5 cursor-pointer press-spring"
+                onClick={cycleMode}
+              >
+                <IcFeatInterfaceSettings width={14} height={14} className="text-text-dim" />
+                <span className="text-[13px] tracking-[-0.13px] text-text font-normal">
+                  {currentMode?.label ?? selectedMode}
+                </span>
+              </button>
+            );
+          })()}
+          {modelItems.length > 0 && (() => {
+            const activeModel = selectedModel || session?.model || '';
+            const currentModel = modelItems.find((m) => m.id === activeModel);
+            const cycleModel = () => {
+              const idx = modelItems.findIndex((m) => m.id === activeModel);
+              const next = modelItems[(idx + 1) % modelItems.length];
+              if (next) setSelectedModel(next.id);
+            };
+            return (
+              <button
+                type="button"
+                className="shrink-0 bg-surface rounded-[6px] border border-border px-3 h-8 flex items-center gap-1.5 cursor-pointer press-spring"
+                onClick={cycleModel}
+              >
+                <IcEditSettings width={14} height={14} className="text-text-dim" />
+                <span className="text-[13px] tracking-[-0.13px] text-text font-normal">
+                  {currentModel?.label ?? activeModel}
+                </span>
+              </button>
+            );
+          })()}
+          {!isRunning && customPrompts.slice(0, 6).map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className="shrink-0 rounded-[6px] border border-border bg-surface px-3 h-8 text-[13px] tracking-[-0.13px] text-text hover:bg-bg"
+              onClick={() => sendQuickPrompt(p.prompt)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="px-3 pt-2 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+          <ChatInput
+            value={input}
+            onChange={setInput}
+            onSend={doSend}
+            onVoiceStart={() => {}}
+            onVoiceStop={isRunning ? handleCancel : undefined}
+            isListening={false}
+            isRunning={isRunning}
+            placeholder={t('web.sendMessage') ?? 'Type a message...'}
+          />
+        </div>
       </div>
     </div>
   );

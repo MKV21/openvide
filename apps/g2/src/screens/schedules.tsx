@@ -85,6 +85,7 @@ const TARGET_KIND_OPTIONS = [
 const TOOL_OPTIONS = [
   { value: 'claude', label: 'Claude' },
   { value: 'codex', label: 'Codex' },
+  { value: 'gemini', label: 'Gemini' },
 ];
 
 const ENABLED_OPTIONS = [

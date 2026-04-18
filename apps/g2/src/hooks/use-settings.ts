@@ -73,7 +73,10 @@ function queueSettingsPersist(
 
 export function useSettings() {
   const queryClient = useQueryClient();
-  const { ensureBridgeForCommand, connectionStatus } = useBridge();
+  const { ensureBridgeForCommand, hosts, hostStatuses, activeHostId } = useBridge();
+  const bridgeAvailable = activeHostId
+    ? hostStatuses[activeHostId] === 'connected'
+    : hosts.some((host) => hostStatuses[host.id] === 'connected');
 
   const query = useQuery<WebSettings>({
     queryKey: ['settings'],
@@ -117,7 +120,7 @@ export function useSettings() {
     return () => {
       cancelled = true;
     };
-  }, [connectionStatus, ensureBridgeForCommand, queryClient]);
+  }, [bridgeAvailable, ensureBridgeForCommand, queryClient]);
 
   return query;
 }

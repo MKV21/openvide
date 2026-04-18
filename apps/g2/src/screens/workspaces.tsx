@@ -20,6 +20,8 @@ import { UNTITLED_DIALOG_CLASS } from '../lib/dialog';
 import { Button, Card, Input, Select, Badge, ListItem, Dialog, useDrawerHeader } from 'even-toolkit/web';
 import { IcEditAdd, IcMenuHome, IcStatusFile } from 'even-toolkit/web/icons/svg-icons';
 
+const WORKSPACE_PAGE_SIZE = 50;
+
 const EMPTY_WORKSPACE_DRAFT = {
   cwd: '',
   tool: 'claude',
@@ -98,6 +100,14 @@ export function WorkspacesRoute() {
   const filteredWorkspaces = search.trim()
     ? workspaces.filter((ws) => ws.name.toLowerCase().includes(search.toLowerCase()) || ws.path.toLowerCase().includes(search.toLowerCase()))
     : workspaces;
+  const [visibleWorkspaceCount, setVisibleWorkspaceCount] = useState(WORKSPACE_PAGE_SIZE);
+
+  useEffect(() => {
+    setVisibleWorkspaceCount(WORKSPACE_PAGE_SIZE);
+  }, [filteredWorkspaces.length, search]);
+
+  const visibleWorkspaces = filteredWorkspaces.slice(0, visibleWorkspaceCount);
+  const hasMoreWorkspaces = filteredWorkspaces.length > visibleWorkspaceCount;
 
   useDrawerHeader({
     title: `${t('web.workspaces')} • ${workspaces.length}`,
@@ -171,7 +181,15 @@ export function WorkspacesRoute() {
             <div className="flex gap-3">
               <div className="flex flex-col gap-1 flex-1">
                 <label className="text-[11px] tracking-[-0.11px] text-text-dim font-normal">{t('web.tool')}</label>
-                <Select value={formTool} onValueChange={(tool) => setDraft((current) => ({ ...current, tool, model: '' }))} options={[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex' }]} />
+                <Select
+                  value={formTool}
+                  onValueChange={(tool) => setDraft((current) => ({ ...current, tool, model: '' }))}
+                  options={[
+                    { value: 'claude', label: 'Claude Code' },
+                    { value: 'codex', label: 'Codex' },
+                    { value: 'gemini', label: 'Gemini' },
+                  ]}
+                />
               </div>
               <div className="flex flex-col gap-1 flex-1">
                 <label className="text-[11px] tracking-[-0.11px] text-text-dim font-normal">{t('web.model')}</label>
@@ -222,7 +240,7 @@ export function WorkspacesRoute() {
               <span className="text-[11px] tracking-[-0.11px] font-normal text-text-dim uppercase tracking-wide">Workspaces</span>
             </div>
             <div className="flex flex-col gap-1.5">
-              {filteredWorkspaces.map((ws) => {
+              {visibleWorkspaces.map((ws) => {
                 const wsSessions = allSessions.filter((s) => s.workingDirectory === ws.path && (!ws.hostId || s.hostId === ws.hostId));
                 const running = wsSessions.filter((s) => s.status === 'running').length;
                 const host = ws.hostId ? hosts.find((h) => h.id === ws.hostId) : null;
@@ -259,6 +277,13 @@ export function WorkspacesRoute() {
                   />
                 );
               })}
+              {hasMoreWorkspaces && (
+                <div className="pt-2">
+                  <Button variant="secondary" size="sm" onClick={() => setVisibleWorkspaceCount((current) => current + WORKSPACE_PAGE_SIZE)}>
+                    Show more ({filteredWorkspaces.length - visibleWorkspaceCount} remaining)
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         )}

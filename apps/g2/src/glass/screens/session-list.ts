@@ -1,17 +1,40 @@
 import type { GlassScreen } from 'even-toolkit/glass-screen-router';
-import { line } from 'even-toolkit/types';
 import { compactHeader } from '../header';
 import { buildScrollableList } from 'even-toolkit/glass-display-builders';
 import { truncate } from 'even-toolkit/text-utils';
 import { fieldJoin, DRILL } from 'even-toolkit/glass-format';
 import type { OpenVideSnapshot, OpenVideActions } from '../types';
 
+type SessionListItem =
+  | { kind: 'create'; cwd: string }
+  | ({ kind: 'session' } & OpenVideSnapshot['sessions'][number]);
+
+function getFilteredSessions(snap: OpenVideSnapshot) {
+  return snap.selectedWorkspace
+    ? snap.sessions.filter((session) => session.workingDirectory === snap.selectedWorkspace)
+    : snap.sessions;
+}
+
+function getSessionItems(snap: OpenVideSnapshot): SessionListItem[] {
+  const filteredSessions = getFilteredSessions(snap);
+  return [
+    { kind: 'create', cwd: snap.selectedWorkspace ?? '~' },
+    ...filteredSessions.map((session) => ({ kind: 'session' as const, ...session })),
+  ];
+}
+
+function isSelectedHostConnected(snap: OpenVideSnapshot): boolean {
+  const selectedHostId = snap.selectedWorkspaceHostId ?? snap.selectedHostId ?? null;
+  if (!selectedHostId) {
+    return snap.hosts.some((host) => snap.hostStatuses[host.id] === 'connected');
+  }
+  return snap.hostStatuses[selectedHostId] === 'connected';
+}
+
 export const sessionListScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = {
   display: (snap, nav) => {
-    // Filter by workspace if set
-    const filtered = snap.selectedWorkspace
-      ? snap.sessions.filter(s => s.workingDirectory === snap.selectedWorkspace)
-      : snap.sessions;
+    const filtered = getFilteredSessions(snap);
+    const items = getSessionItems(snap);
 
     const count = filtered.length;
     const running = filtered.filter(s => s.status === 'running').length;
@@ -23,18 +46,19 @@ export const sessionListScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> =
     if (running > 0) headerParts.push(`${running} run`);
     if (idle > 0) headerParts.push(`${idle} idle`);
 
-    const lines = [...compactHeader(fieldJoin(...headerParts))];
-
-    if (count === 0) {
-      lines.push(line('No sessions', 'meta'));
-      return { lines };
-    }
+    const showOfflineWarning = !isSelectedHostConnected(snap);
+    const lines = [...compactHeader(fieldJoin(...headerParts), undefined, showOfflineWarning ? '! offline' : undefined)];
 
     lines.push(...buildScrollableList({
-      items: filtered,
+      items,
       highlightedIndex: nav.highlightedIndex,
       maxVisible: 8,
-      formatter: (s) => {
+      formatter: (item) => {
+        if (item.kind === 'create') {
+          const cwd = item.cwd.split('/').filter(Boolean).pop() ?? item.cwd;
+          return `${fieldJoin('new', truncate(cwd || '~', 18), 'start')} ${DRILL}`;
+        }
+        const s = item;
         const tool = s.tool.slice(0, 6);
         const st = s.status === 'running' ? 'run' : s.status.slice(0, 4);
         const dir = s.workingDirectory.split('/').pop() ?? '';
@@ -47,21 +71,41 @@ export const sessionListScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> =
   },
 
   action: (action, nav, snap, ctx) => {
-    const filtered = snap.selectedWorkspace
-      ? snap.sessions.filter(s => s.workingDirectory === snap.selectedWorkspace)
-      : snap.sessions;
+    const items = getSessionItems(snap);
 
     if (action.type === 'HIGHLIGHT_MOVE') {
-      const max = Math.max(0, filtered.length - 1);
+      const max = Math.max(0, items.length - 1);
       const idx = action.direction === 'down'
         ? Math.min(nav.highlightedIndex + 1, max)
         : Math.max(nav.highlightedIndex - 1, 0);
       return { ...nav, highlightedIndex: idx };
     }
     if (action.type === 'SELECT_HIGHLIGHTED') {
-      const session = filtered[nav.highlightedIndex];
-      if (session) {
-        ctx.navigate(`/chat?id=${session.id}`);
+      const selected = items[nav.highlightedIndex];
+      if (selected?.kind === 'session') {
+        if (selected.origin === 'native' && selected.resumeId) {
+          const hostId = selected.hostId ?? snap.selectedWorkspaceHostId ?? snap.selectedHostId ?? snap.hosts[0]?.id;
+          void (async () => {
+            const createRes = await ctx.rpc('session.create', {
+              hostId,
+              tool: selected.tool,
+              cwd: selected.workingDirectory,
+              model: selected.model,
+              conversationId: selected.resumeId,
+              autoAccept: true,
+            });
+            const sessionId = typeof createRes?.session?.id === 'string' ? createRes.session.id : null;
+            if (sessionId) {
+              ctx.navigate(`/chat?id=${encodeURIComponent(sessionId)}`);
+            }
+          })();
+        } else {
+          ctx.navigate(`/chat?id=${selected.id}`);
+        }
+      } else if (selected?.kind === 'create') {
+        // Hand off to the tool-picker screen so the user chooses
+        // claude / codex / gemini before the session spawns.
+        ctx.navigate('/tool-picker');
       }
       return { ...nav, highlightedIndex: 0 };
     }

@@ -98,16 +98,24 @@ function parseCliObject(obj: any): string[] {
     return [];
   }
 
+  if (obj.type === 'user' && obj.message) {
+    return parseUserMessage(obj.message);
+  }
+
   if (obj.type === 'assistant' && obj.message) {
     return parseAssistantMessage(obj.message);
   }
 
   if (obj.type === 'result') return [];
   if (obj.type === 'rate_limit_event') return [];
+  if (obj.type === 'event_msg') return [];
 
   // Codex
   if (obj.type === 'thread.started') return [];
   if (obj.type === 'turn.started') return [];
+  if (obj.type === 'response_item' && obj.payload) {
+    return parseCodexResponseItem(obj.payload);
+  }
 
   if (obj.type === 'item.completed' && obj.item) {
     return parseCodexItem(obj.item);
@@ -115,12 +123,43 @@ function parseCliObject(obj: any): string[] {
 
   if (obj.type === 'turn.completed') return [];
 
-  // Gemini
+  // Gemini — streaming event
   if (obj.type === 'text' && obj.text) {
     return splitIntoLines(obj.text);
   }
 
+  // Gemini — final JSON blob: { session_id, response, stats, ... }
+  if (typeof obj.response === 'string' && obj.response.length > 0) {
+    return splitIntoLines(obj.response);
+  }
+
   return [];
+}
+
+function extractTextBlocks(content: any, expectedTypes: string[]): string {
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return '';
+  }
+
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const type = typeof block.type === 'string' ? block.type : '';
+    const text = typeof block.text === 'string' ? block.text.trim() : '';
+    if (!text) continue;
+    if (expectedTypes.includes(type) || type === 'text') {
+      parts.push(text);
+    }
+  }
+  return parts.join('\n').trim();
+}
+
+function parseUserMessage(message: any): string[] {
+  const text = extractTextBlocks(message?.content, ['input_text']);
+  return text ? [`§P§${text}`] : [];
 }
 
 function parseAssistantMessage(message: any): string[] {
@@ -176,6 +215,43 @@ function parseAssistantMessage(message: any): string[] {
   }
 
   return lines;
+}
+
+function parseCodexResponseItem(payload: any): string[] {
+  const payloadType = typeof payload?.type === 'string' ? payload.type : '';
+
+  if (payloadType === 'message') {
+    const role = typeof payload?.role === 'string' ? payload.role : '';
+    const text = extractTextBlocks(
+      payload?.content,
+      role === 'user' ? ['input_text'] : ['output_text'],
+    );
+    if (!text) return [];
+    return role === 'user' ? [`§P§${text}`] : splitIntoLines(text);
+  }
+
+  if (payloadType === 'reasoning') {
+    const sourceText = Array.isArray(payload?.summary)
+      ? payload.summary
+        .map((entry: any) => (entry && typeof entry.text === 'string' ? entry.text : ''))
+        .filter(Boolean)
+        .join('\n')
+      : (typeof payload?.text === 'string' ? payload.text : '');
+    if (!sourceText.trim()) return [];
+    const id = thinkingCounter++;
+    const thinkLines = splitIntoLines(sourceText.trim());
+    const summary = thinkLines[0] ?? 'Reasoning...';
+    return [
+      `${THINK_HEADER}${id}§${summary}`,
+      ...thinkLines.slice(1).map((line) => `${THINK_BODY}${id}§${line}`),
+    ];
+  }
+
+  if (payloadType === 'function_call') {
+    return [`>> ${payload.name ?? 'tool'}`];
+  }
+
+  return [];
 }
 
 function parseCodexItem(item: any): string[] {

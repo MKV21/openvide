@@ -7,10 +7,23 @@ export function useCreateSession() {
   const { ensureBridgeForCommand, hosts, activeHostId } = useBridge();
 
   return useMutation({
-    mutationFn: async ({ tool, cwd, model, hostId }: { tool: string; cwd: string; model?: string; hostId?: string }) => {
+    mutationFn: async ({
+      tool,
+      cwd,
+      model,
+      hostId,
+      conversationId,
+    }: {
+      tool: string;
+      cwd: string;
+      model?: string;
+      hostId?: string;
+      conversationId?: string;
+    }) => {
       ensureBridgeForCommand();
       const params: Record<string, unknown> = { tool, cwd, autoAccept: true };
       if (model) params.model = model;
+       if (conversationId) params.conversationId = conversationId;
       const res = await rpcForHost(hosts, hostId ?? activeHostId, 'session.create', params);
       if (res.ok && res.session) {
         return (res.session as any).id as string;

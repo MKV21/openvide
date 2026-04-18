@@ -20,7 +20,10 @@ function normalizeBridgeConfig(config?: Partial<WebBridgeConfig> | null): WebBri
     port: typeof config?.port === 'number' ? config.port : 7842,
     tls: config?.tls !== false,
     defaultCwd: config?.defaultCwd ?? '',
-    evenAiTool: config?.evenAiTool === 'codex' ? 'codex' : 'claude',
+    evenAiTool:
+      config?.evenAiTool === 'codex' || config?.evenAiTool === 'gemini'
+        ? config.evenAiTool
+        : 'claude',
     evenAiMode:
       config?.evenAiMode === 'new' || config?.evenAiMode === 'pinned'
         ? config.evenAiMode
@@ -67,4 +70,3 @@ export function useUpdateBridgeConfig() {
     },
   });
 }
-

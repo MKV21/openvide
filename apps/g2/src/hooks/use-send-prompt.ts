@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { rpc } from '@/domain/daemon-client';
 import { useBridge } from '../contexts/bridge';
 import type { WebSession } from '../types';
@@ -34,6 +34,7 @@ export function useCancelSession(sessions?: WebSession[]) {
 
 export function useDismissSession() {
   const { ensureBridgeForSession } = useBridge();
+  const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async ({ sessionId, sessions }: { sessionId: string; sessions?: WebSession[] }) => {
@@ -41,6 +42,12 @@ export function useDismissSession() {
       const res = await rpc('session.remove', { id: sessionId });
       if (!res.ok) throw new Error(res.error ?? 'Failed to dismiss');
       return true;
+    },
+    onSuccess: () => {
+      // Force the sessions list to refetch so the removed row disappears.
+      void queryClient.invalidateQueries({ queryKey: ['sessions'] });
+      void queryClient.invalidateQueries({ queryKey: ['workspace-sessions'] });
+      void queryClient.invalidateQueries({ queryKey: ['workspaces'] });
     },
   });
 }

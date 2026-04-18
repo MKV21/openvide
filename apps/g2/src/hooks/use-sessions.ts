@@ -2,12 +2,12 @@ import { useQuery } from '@tanstack/react-query';
 import { rpc, rpcToHost, setBridgeUrl } from '@/domain/daemon-client';
 import { useBridge, useBridgeUpdate } from '../contexts/bridge';
 import { DEFAULT_POLL_INTERVAL } from '../lib/constants';
-import type { WebSession, WebSettings } from '../types';
+import type { WebSession } from '../types';
 
 function mapHostSessions(raw: any[], hostId?: string): WebSession[] {
   return raw.map((s) => ({
     id: s.id,
-    hostId,
+    hostId: s.hostId ?? hostId,
     tool: s.tool,
     status: s.status,
     runKind: s.runKind,
@@ -17,11 +17,15 @@ function mapHostSessions(raw: any[], hostId?: string): WebSession[] {
     teamName: s.teamName,
     workingDirectory: s.workingDirectory,
     model: s.model,
-    lastPrompt: s.lastTurn?.prompt,
+    lastPrompt: s.lastTurn?.prompt ?? s.summary,
     lastError: s.lastTurn?.error,
-    updatedAt: s.updatedAt,
+    updatedAt: s.updatedAt ?? s.createdAt ?? new Date().toISOString(),
     outputLines: s.outputLines ?? 0,
-    origin: 'daemon' as const,
+    origin: s.origin === 'native' ? 'native' : 'daemon',
+    resumeId: s.resumeId ?? s.conversationId,
+    title: s.title,
+    summary: s.summary,
+    messageCount: s.messageCount,
   }));
 }
 
@@ -35,9 +39,16 @@ export function useSessions(pollInterval: number = DEFAULT_POLL_INTERVAL) {
       if (hosts.length === 0) {
         // No hosts — single-bridge fallback
         try {
-          const res = await rpc('session.list');
+          const res = await rpc('session.catalog');
           if (res.ok && Array.isArray(res.sessions)) {
             const sessions = mapHostSessions(res.sessions as any[]);
+            sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+            updateHostStatuses({});
+            return sessions;
+          }
+          const fallback = await rpc('session.list');
+          if (fallback.ok && Array.isArray(fallback.sessions)) {
+            const sessions = mapHostSessions(fallback.sessions as any[]);
             sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
             updateHostStatuses({});
             return sessions;
@@ -53,7 +64,7 @@ export function useSessions(pollInterval: number = DEFAULT_POLL_INTERVAL) {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 3000);
           try {
-            const res = await rpcToHost(host.url, 'session.list', undefined, controller.signal, {
+            let res = await rpcToHost(host.url, 'session.catalog', undefined, controller.signal, {
               hostId: host.id,
               token: host.token,
               accessToken: host.accessToken,
@@ -62,6 +73,17 @@ export function useSessions(pollInterval: number = DEFAULT_POLL_INTERVAL) {
               accessTokenExpiresAt: host.accessTokenExpiresAt,
               refreshTokenExpiresAt: host.refreshTokenExpiresAt,
             });
+            if (!res.ok || !Array.isArray(res.sessions)) {
+              res = await rpcToHost(host.url, 'session.list', undefined, controller.signal, {
+                hostId: host.id,
+                token: host.token,
+                accessToken: host.accessToken,
+                refreshToken: host.refreshToken,
+                authSessionId: host.authSessionId,
+                accessTokenExpiresAt: host.accessTokenExpiresAt,
+                refreshTokenExpiresAt: host.refreshTokenExpiresAt,
+              });
+            }
             clearTimeout(timer);
             if (res.ok && Array.isArray(res.sessions)) {
               hostStatuses[host.id] = 'connected';

@@ -23,7 +23,7 @@ export const POLL_INTERVALS = [
 
 export const PROMPT_CATEGORIES: Record<string, string[]> = {
   General: ['builtin_explain', 'builtin_continue', 'builtin_status'],
-  Debug: ['builtin_error', 'builtin_tests'],
+  Debug: ['builtin_explain_error', 'builtin_tests'],
   Review: ['builtin_review', 'builtin_changes'],
   Refactor: ['builtin_refactor', 'builtin_commit', 'builtin_undo'],
 };

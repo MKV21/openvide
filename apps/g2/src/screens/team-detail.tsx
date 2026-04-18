@@ -77,6 +77,7 @@ const PLAN_MAX_ITERATION_OPTIONS = [
 const TEAM_TOOL_OPTIONS = [
   { value: 'claude', label: 'Claude' },
   { value: 'codex', label: 'Codex' },
+  { value: 'gemini', label: 'Gemini' },
 ];
 
 const TEAM_ROLE_OPTIONS = [

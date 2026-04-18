@@ -20,6 +20,9 @@ import { UNTITLED_DIALOG_CLASS } from '../lib/dialog';
 import { IcEditAdd, IcEditChecklist, IcStatusFile } from 'even-toolkit/web/icons/svg-icons';
 import { useBridge } from '../contexts/bridge';
 import { useDrawerHeader } from 'even-toolkit/web';
+import { useOpenSession } from '../hooks/use-open-session';
+
+const WORKSPACE_SESSION_PAGE_SIZE = 50;
 
 function formatTimeAgo(dateStr: string): string {
   if (!dateStr) return '';
@@ -45,6 +48,7 @@ export function WorkspaceDetailRoute() {
   const { data: models } = useModels();
   const createSession = useCreateSession();
   const dismissSession = useDismissSession();
+  const { openSession } = useOpenSession(sessions);
   const { hosts, activeHostId, switchHost } = useBridge();
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -93,6 +97,14 @@ export function WorkspaceDetailRoute() {
   const scheduledWsSessions = wsSessions.filter(isScheduledSession);
   const teamWsSessions = wsSessions.filter(isTeamSession);
   const filteredWsSessions = filterSessionsByChip(wsSessions, statusFilter);
+  const [visibleCount, setVisibleCount] = useState(WORKSPACE_SESSION_PAGE_SIZE);
+
+  useEffect(() => {
+    setVisibleCount(WORKSPACE_SESSION_PAGE_SIZE);
+  }, [filteredWsSessions.length, statusFilter, wsPath, wsHostId]);
+
+  const visiblePageSessions = filteredWsSessions.slice(0, visibleCount);
+  const hasMoreSessions = filteredWsSessions.length > visibleCount;
   const filters: { id: SessionFilter; label: string }[] = [
     { id: 'all', label: 'All' },
     { id: 'scheduled', label: `Scheduled (${scheduledWsSessions.length})` },
@@ -106,6 +118,9 @@ export function WorkspaceDetailRoute() {
 
   useDrawerHeader({
     title: `${wsName} • ${visibleWsSessions.length}`,
+    // Always return to the workspaces list, bypassing whatever history entry
+    // put us here (e.g. chat → workspace detail shouldn't loop).
+    backTo: '/',
     right: (
       <div className="flex items-center gap-1.5">
         <Button
@@ -138,12 +153,18 @@ export function WorkspaceDetailRoute() {
       leading={<ProviderBadge provider={s.tool as 'claude' | 'codex' | 'gemini'} size={32} />}
       trailing={
         <div className="flex items-center gap-1 shrink-0">
+          {s.origin === 'native' && <Badge variant="neutral">native</Badge>}
           {isScheduledSession(s) && <Badge variant="neutral">scheduled</Badge>}
           {isTeamSession(s) && <Badge variant="neutral">team</Badge>}
           <Badge variant={statusVariant(s.status)}>{s.status}</Badge>
         </div>
       }
-      onPress={() => navigate(`/chat?id=${s.id}`)}
+      onPress={() => {
+        void (async () => {
+          const sessionId = await openSession(s);
+          navigate(`/chat?id=${sessionId}`);
+        })();
+      }}
       onDelete={showDismiss && s.status !== 'running' ? () => dismissSession.mutate({ sessionId: s.id, sessions: wsSessions }) : undefined}
     />
   );
@@ -184,7 +205,15 @@ export function WorkspaceDetailRoute() {
             <div className="flex gap-3">
               <div className="flex-1 flex flex-col gap-1">
                 <label className="text-[11px] tracking-[-0.11px] text-text-dim font-normal">{t('web.tool')}</label>
-                <Select value={formTool} onValueChange={(tool) => { setFormTool(tool); setFormModel(''); }} options={[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex' }]} />
+                <Select
+                  value={formTool}
+                  onValueChange={(tool) => { setFormTool(tool); setFormModel(''); }}
+                  options={[
+                    { value: 'claude', label: 'Claude Code' },
+                    { value: 'codex', label: 'Codex' },
+                    { value: 'gemini', label: 'Gemini' },
+                  ]}
+                />
               </div>
               <div className="flex-1 flex flex-col gap-1">
                 <label className="text-[11px] tracking-[-0.11px] text-text-dim font-normal">{t('web.model')}</label>
@@ -216,7 +245,14 @@ export function WorkspaceDetailRoute() {
                     <span className="text-[11px] tracking-[-0.11px] font-normal text-text-dim uppercase tracking-wide">{t('web.activeSessions')}</span>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    {filteredWsSessions.map((s) => renderSessionCard(s))}
+                    {visiblePageSessions.map((s) => renderSessionCard(s))}
+                    {hasMoreSessions && (
+                      <div className="pt-2">
+                        <Button variant="secondary" size="sm" onClick={() => setVisibleCount((current) => current + WORKSPACE_SESSION_PAGE_SIZE)}>
+                          Show more ({filteredWsSessions.length - visibleCount} remaining)
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

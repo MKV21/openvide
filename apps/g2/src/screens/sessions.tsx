@@ -5,6 +5,7 @@ import { useSessions } from '../hooks/use-sessions';
 import { useModels } from '../hooks/use-models';
 import { useCreateSession } from '../hooks/use-create-session';
 import { useDismissSession } from '../hooks/use-send-prompt';
+import { useOpenSession } from '../hooks/use-open-session';
 import { useBridge } from '../contexts/bridge';
 import { useTranslation } from '../hooks/useTranslation';
 import { EmptyState } from '../components/shared/empty-state';
@@ -17,6 +18,8 @@ import { filterSessionsByChip, isScheduledSession, isTeamSession, type SessionFi
 import { UNTITLED_DIALOG_CLASS } from '../lib/dialog';
 import { Button, Card, Input, Select, Badge, ListItem, Dialog, useDrawerHeader } from 'even-toolkit/web';
 import { IcEditAdd, IcEditChecklist, IcStatusFile } from 'even-toolkit/web/icons/svg-icons';
+
+const SESSION_PAGE_SIZE = 50;
 
 function formatTimeAgo(dateStr: string): string {
   if (!dateStr) return '';
@@ -45,6 +48,7 @@ export function SessionsRoute() {
   const { hosts, activeHostId, switchHost } = useBridge();
   const createSession = useCreateSession();
   const dismissSession = useDismissSession();
+  const { openSession } = useOpenSession(sessions);
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { pullHandlers, PullIndicator } = usePullRefresh(async () => {
@@ -97,6 +101,14 @@ export function SessionsRoute() {
   const scheduledSessions = allSessions.filter(isScheduledSession);
   const teamSessions = allSessions.filter(isTeamSession);
   const filteredSessions = filterSessionsByChip(allSessions, statusFilter);
+  const [visibleCount, setVisibleCount] = useState(SESSION_PAGE_SIZE);
+
+  useEffect(() => {
+    setVisibleCount(SESSION_PAGE_SIZE);
+  }, [statusFilter, filteredSessions.length]);
+
+  const visiblePageSessions = filteredSessions.slice(0, visibleCount);
+  const hasMoreSessions = filteredSessions.length > visibleCount;
 
   const statusVariant = (status: string) => {
     if (status === 'running') return 'positive' as const;
@@ -161,7 +173,15 @@ export function SessionsRoute() {
               <div className="flex gap-3">
                 <div className="flex-1 flex flex-col gap-1">
                   <label className="text-[11px] tracking-[-0.11px] text-text-dim font-normal">{t('web.tool')}</label>
-                  <Select value={formTool} onValueChange={(tool) => setDraft((current) => ({ ...current, tool, model: '' }))} options={[{ value: 'claude', label: 'Claude Code' }, { value: 'codex', label: 'Codex' }]} />
+                  <Select
+                    value={formTool}
+                    onValueChange={(tool) => setDraft((current) => ({ ...current, tool, model: '' }))}
+                    options={[
+                      { value: 'claude', label: 'Claude Code' },
+                      { value: 'codex', label: 'Codex' },
+                      { value: 'gemini', label: 'Gemini' },
+                    ]}
+                  />
                 </div>
                 <div className="flex-1 flex flex-col gap-1">
                   <label className="text-[11px] tracking-[-0.11px] text-text-dim font-normal">{t('web.model')}</label>
@@ -198,7 +218,7 @@ export function SessionsRoute() {
             <EmptyState icon={<IcEditChecklist width={32} height={32} />} title={t('web.noSessions')} description={t('web.noSessionsHint')} />
           ) : (
             <div className="flex flex-col gap-1.5">
-              {filteredSessions.map((s) => {
+              {visiblePageSessions.map((s) => {
                 const dir = s.workingDirectory.split('/').pop() ?? s.workingDirectory;
                 const host = s.hostId ? hosts.find((h) => h.id === s.hostId) : null;
                 return (
@@ -209,16 +229,29 @@ export function SessionsRoute() {
                     leading={<ProviderBadge provider={s.tool as 'claude' | 'codex' | 'gemini'} size={32} />}
                     trailing={
                       <div className="flex items-center gap-1 shrink-0">
+                        {s.origin === 'native' && <Badge variant="neutral">native</Badge>}
                         {isScheduledSession(s) && <Badge variant="neutral">scheduled</Badge>}
                         {isTeamSession(s) && <Badge variant="neutral">team</Badge>}
                         <Badge variant={statusVariant(s.status)}>{s.status}</Badge>
                       </div>
                     }
-                    onPress={() => navigate(`/chat?id=${s.id}`)}
+                    onPress={() => {
+                      void (async () => {
+                        const sessionId = await openSession(s);
+                        navigate(`/chat?id=${sessionId}`);
+                      })();
+                    }}
                     onDelete={s.status !== 'running' ? () => dismissSession.mutate({ sessionId: s.id, sessions: allSessions }) : undefined}
                   />
                 );
               })}
+              {hasMoreSessions && (
+                <div className="pt-2">
+                  <Button variant="secondary" size="sm" onClick={() => setVisibleCount((current) => current + SESSION_PAGE_SIZE)}>
+                    Show more ({filteredSessions.length - visibleCount} remaining)
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>

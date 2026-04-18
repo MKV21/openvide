@@ -10,10 +10,12 @@ import { teamListScreen } from './screens/team-list';
 import { teamDetailScreen } from './screens/team-detail';
 import { teamChatScreen } from './screens/team-chat';
 import { settingsScreen } from './screens/settings';
+import { promptSelectScreen } from './screens/prompt-select';
 import { schedulesScreen } from './screens/schedules';
 import { fileBrowserScreen } from './screens/file-browser';
 import { fileViewerScreen } from './screens/file-viewer';
 import { sessionDiffsScreen } from './screens/session-diffs';
+import { toolPickerScreen } from './screens/tool-picker';
 
 export type { OpenVideSnapshot, OpenVideActions };
 
@@ -28,8 +30,10 @@ export const { toDisplayData, onGlassAction } = createGlassScreenRouter<OpenVide
   'team-detail': teamDetailScreen,
   'team-chat': teamChatScreen,
   'settings': settingsScreen,
+  'prompt-select': promptSelectScreen,
   'schedules': schedulesScreen,
   'file-browser': fileBrowserScreen,
   'file-viewer': fileViewerScreen,
   'session-diffs': sessionDiffsScreen,
+  'tool-picker': toolPickerScreen,
 }, 'home');

@@ -1,8 +1,7 @@
 import type { GlassScreen } from 'even-toolkit/glass-screen-router';
-import { line } from 'even-toolkit/types';
 import { compactHeader } from '../header';
 import { buildScrollableList } from 'even-toolkit/glass-display-builders';
-import { fieldJoin, drillLabel, SEP } from 'even-toolkit/glass-format';
+import { fieldJoin, drillLabel } from 'even-toolkit/glass-format';
 import type { OpenVideSnapshot, OpenVideActions } from '../types';
 
 const MENU_KEYS = ['workspaces', 'sessions', 'teams', 'hosts', 'schedules', 'files', 'settings'] as const;
@@ -49,13 +48,15 @@ export const homeScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = {
       { key: 'settings', info: 'Settings' },
     ];
 
+    const showOfflineWarning = !connected;
+    const maxVisible = 7;
+
     const lines = [
-      line('◆  O P E N   V I D E  ◆', 'normal'),
-      line('', 'separator'),
+      ...compactHeader('◆  O P E N   V I D E  ◆', undefined, showOfflineWarning ? '! offline' : undefined),
       ...buildScrollableList({
         items: menuItems,
         highlightedIndex: nav.highlightedIndex,
-        maxVisible: 7,
+        maxVisible,
         formatter: (item) => drillLabel(item.info),
       }),
     ];

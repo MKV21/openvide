@@ -62,6 +62,13 @@ export interface Prompt {
   isBuiltIn: boolean;
 }
 
+export interface SuggestedPrompt {
+  id: string;
+  label: string;
+  prompt: string;
+  source: 'ai' | 'heuristic';
+}
+
 export interface ModelInfo {
   id: string;
   displayName: string;
@@ -87,7 +94,7 @@ export interface WebBridgeConfig {
   port: number;
   tls: boolean;
   defaultCwd: string;
-  evenAiTool: 'claude' | 'codex';
+  evenAiTool: 'claude' | 'codex' | 'gemini';
   evenAiMode: 'new' | 'last' | 'pinned';
   evenAiPinnedSessionId: string;
   currentEvenAiSessionId: string;

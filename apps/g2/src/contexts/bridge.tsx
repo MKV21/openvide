@@ -179,8 +179,6 @@ export function BridgeProvider({ children }: { children: ReactNode }) {
   // Update host statuses from polling (called by useSessions hook)
   const updateHostStatuses = useCallback((statuses: Record<string, 'connected' | 'disconnected'>) => {
     setHostStatuses(statuses);
-    const anyConnected = Object.values(statuses).some((s) => s === 'connected');
-    setConnectionStatus(anyConnected ? 'connected' : 'disconnected');
   }, []);
 
   return (

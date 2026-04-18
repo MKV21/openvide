@@ -47,7 +47,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export function SettingsRoute() {
   const navigate = useNavigate();
-  const { connectionStatus, hosts, activeHostId } = useBridge();
+  const { connectionStatus, hosts, hostStatuses, activeHostId } = useBridge();
   const { data: settings } = useSettings();
   const { t } = useTranslation();
   const { data: bridgeConfig, error: bridgeConfigError } = useBridgeConfig();
@@ -63,7 +63,15 @@ export function SettingsRoute() {
     right: <span className="data-mono text-[11px] text-text-dim">v{APP_VERSION}</span>,
   });
 
-  const isConnected = connectionStatus === 'connected';
+  const activeHostStatus = activeHostId ? hostStatuses[activeHostId] : undefined;
+  const isConnected = activeHostId
+    ? activeHostStatus === 'connected'
+    : hosts.some((host) => hostStatuses[host.id] === 'connected');
+  const statusLabel = isConnected
+    ? t('web.connected')
+    : connectionStatus === 'connecting'
+      ? t('home.connecting')
+      : t('web.disconnected');
   const connectedHosts = hosts.filter((h) => true).length; // all configured hosts
   const activeHost = hosts.find((host) => host.id === activeHostId) ?? hosts[0] ?? null;
   const endpointBase = activeHost?.url ?? '';
@@ -122,7 +130,7 @@ export function SettingsRoute() {
             </div>
             <div className="flex-1">
               <span className="text-[15px] tracking-[-0.15px] text-text font-normal">
-                {isConnected ? t('web.connected') : t('web.disconnected')}
+                {statusLabel}
               </span>
               <p className="data-mono">{connectedHosts} {connectedHosts === 1 ? t('web.host') : t('web.hosts')} configured</p>
             </div>
@@ -137,6 +145,14 @@ export function SettingsRoute() {
             description="Setup, bridge pairing, host selection, and external links"
           >
             <Button size="sm" variant="secondary" onClick={() => navigate('/guide')}>
+              {t('web.open')}
+            </Button>
+          </SettingRow>
+          <SettingRow
+            label={t('web.quickPrompts') ?? 'Quick prompts'}
+            description="Edit the quick prompts shown in chat and the voice input page"
+          >
+            <Button size="sm" variant="secondary" onClick={() => navigate('/prompts')}>
               {t('web.open')}
             </Button>
           </SettingRow>
@@ -234,9 +250,10 @@ export function SettingsRoute() {
               options={[
                 { value: 'claude', label: 'Claude' },
                 { value: 'codex', label: 'Codex' },
+                { value: 'gemini', label: 'Gemini' },
               ]}
               disabled={!isConnected}
-              onValueChange={(value) => updateBridgeConfig.mutate({ evenAiTool: value as 'claude' | 'codex' })}
+              onValueChange={(value) => updateBridgeConfig.mutate({ evenAiTool: value as 'claude' | 'codex' | 'gemini' })}
               className="w-[130px]"
             />
           </SettingRow>
@@ -371,4 +388,3 @@ export function SettingsRoute() {
     </div>
   );
 }
-

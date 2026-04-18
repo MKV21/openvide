@@ -7,15 +7,20 @@ import { toDisplayData, onGlassAction } from './selectors';
 import type { OpenVideSnapshot, OpenVideActions } from './types';
 import { rpc, rpcToHost, subscribe } from '../domain/daemon-client';
 import { parseOutputLine } from '../domain/output-parser';
+import { parseNativeHistoryToDisplayLines } from '../domain/native-history';
 import { useSessions } from '../hooks/use-sessions';
 import { useWorkspaces } from '../hooks/use-workspaces';
 import { useBridge } from '../contexts/bridge';
+import { useVoice } from '../contexts/voice';
 import { useSettings, defaultSettings, normalizeSettings } from '../hooks/use-settings';
+import { usePrompts } from '../hooks/use-prompts';
 import { useBrowserEntries, useFileContent } from '../hooks/use-file-browser';
 import { startVoiceCapture, stopVoiceCapture } from '../input/voice';
 import type { Store } from '../state/store';
 import type { Action } from '../state/actions';
 import { applySettingsPatch } from '../lib/settings';
+import { rpcForHost } from '../lib/bridge-hosts';
+import type { WebHost } from '../types';
 import {
   SETTINGS_CACHE_KEY,
   SETTINGS_PENDING_KEY,
@@ -24,12 +29,14 @@ import {
 } from '../lib/settings-storage';
 
 const VOICE_ROUTE = '/voice-input';
+const NATIVE_SYNC_POLL_MS = 4000;
 
 const deriveScreen = createScreenMapper([
   { pattern: '/', screen: 'home' },
   { pattern: '/workspace', screen: 'workspace-detail' },
   { pattern: '/sessions', screen: 'session-list' },
   { pattern: VOICE_ROUTE, screen: 'voice-input' },
+  { pattern: '/prompt-select', screen: 'prompt-select' },
   { pattern: /^\/chat/, screen: 'live-output' },
   { pattern: '/hosts', screen: 'host-list' },
   { pattern: '/teams', screen: 'team-list' },
@@ -40,6 +47,7 @@ const deriveScreen = createScreenMapper([
   { pattern: '/file-view', screen: 'file-viewer' },
   { pattern: /^\/files/, screen: 'file-browser' },
   { pattern: '/diffs', screen: 'session-diffs' },
+  { pattern: '/tool-picker', screen: 'tool-picker' },
 ], 'home');
 
 /**
@@ -48,13 +56,28 @@ const deriveScreen = createScreenMapper([
  */
 function useGlassOutputStream(
   sessionId: string | null,
-  sessions: Array<{ id: string; hostId?: string }> | undefined,
+  sessions: Array<{
+    id: string;
+    hostId?: string;
+    tool?: string;
+    status?: string;
+    outputLines?: number;
+    origin?: 'daemon' | 'native';
+    resumeId?: string;
+    workingDirectory?: string;
+  }> | undefined,
   ensureBridge: (sessionId: string, sessions: Array<{ id: string; hostId?: string }>) => void,
+  hosts: WebHost[],
+  activeHostId: string | null,
 ): string[] {
   const [outputLines, setOutputLines] = useState<string[]>([]);
-  const linesRef = useRef<string[]>([]);
+  const streamLinesRef = useRef<string[]>([]);
+  const nativeLinesRef = useRef<string[]>([]);
   const seenRef = useRef(new Set<string>());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadedNativeHistoryKeyRef = useRef<string | null>(null);
+  const nativeHistoryLineCountRef = useRef(0);
+  const session = sessions?.find((entry) => entry.id === sessionId) ?? null;
 
   // Ensure bridge points at the right host before subscribing
   useEffect(() => {
@@ -64,14 +87,19 @@ function useGlassOutputStream(
   useEffect(() => {
     if (!sessionId) {
       setOutputLines([]);
-      linesRef.current = [];
+      streamLinesRef.current = [];
+      nativeLinesRef.current = [];
       seenRef.current = new Set();
+      nativeHistoryLineCountRef.current = 0;
       return;
     }
 
     // Reset on session change
-    linesRef.current = [];
+    streamLinesRef.current = [];
+    nativeLinesRef.current = [];
     seenRef.current = new Set();
+    loadedNativeHistoryKeyRef.current = null;
+    nativeHistoryLineCountRef.current = 0;
     setOutputLines([]);
 
     const unsub = subscribe(sessionId, (rawLine: string) => {
@@ -80,11 +108,11 @@ function useGlassOutputStream(
 
       const parsed = parseOutputLine(rawLine);
       if (parsed.length > 0) {
-        linesRef.current.push(...parsed);
+        streamLinesRef.current.push(...parsed);
         // Debounce state update
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => {
-          setOutputLines([...linesRef.current]);
+          setOutputLines([...nativeLinesRef.current, ...streamLinesRef.current]);
         }, 150);
       }
     });
@@ -94,6 +122,118 @@ function useGlassOutputStream(
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !session?.resumeId) return;
+    if (session.tool !== 'claude' && session.tool !== 'codex') return;
+    if (session.origin !== 'native' && (session.outputLines ?? 0) > 0) return;
+
+    const historyKey = [
+      session.id,
+      session.origin ?? 'daemon',
+      session.tool,
+      session.resumeId,
+      session.workingDirectory ?? '',
+      session.outputLines ?? 0,
+    ].join(':');
+    if (loadedNativeHistoryKeyRef.current === historyKey) return;
+    loadedNativeHistoryKeyRef.current = historyKey;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await rpcForHost(hosts, session.hostId ?? activeHostId, 'session.history', {
+          tool: session.tool,
+          resumeId: session.resumeId,
+          cwd: session.workingDirectory,
+          limitLines: 8000,
+        });
+        if (cancelled || !res.ok || !res.history || !Array.isArray((res.history as any).lines)) {
+          return;
+        }
+
+        nativeHistoryLineCountRef.current = typeof (res.history as any).lineCount === 'number'
+          ? ((res.history as any).lineCount as number)
+          : nativeHistoryLineCountRef.current;
+        const parsedLines = parseNativeHistoryToDisplayLines(
+          (res.history as any).format as string | undefined,
+          (res.history as any).lines as string[],
+        );
+        nativeLinesRef.current = parsedLines;
+        setOutputLines([...parsedLines, ...streamLinesRef.current]);
+      } catch {
+        // Keep the current output visible if native history bootstrap fails.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeHostId, hosts, session?.hostId, session?.id, session?.origin, session?.outputLines, session?.resumeId, session?.tool, session?.workingDirectory, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !session?.resumeId) return;
+    if (session.tool !== 'claude' && session.tool !== 'codex') return;
+    if (session.status === 'running') return;
+
+    let cancelled = false;
+
+    const syncNativeHistory = async () => {
+      try {
+        const res = await rpcForHost(hosts, session.hostId ?? activeHostId, 'session.history', {
+          tool: session.tool,
+          resumeId: session.resumeId,
+          cwd: session.workingDirectory,
+          limitLines: 8000,
+        });
+        if (cancelled || !res.ok || !res.history || !Array.isArray((res.history as any).lines)) {
+          return;
+        }
+
+        const lineCount = typeof (res.history as any).lineCount === 'number'
+          ? ((res.history as any).lineCount as number)
+          : 0;
+        const shouldBootstrap = session.origin === 'native' || (session.outputLines ?? 0) === 0;
+        const hasNewNativeHistory = lineCount > nativeHistoryLineCountRef.current;
+        const shouldUseNativeHistory = shouldBootstrap || streamLinesRef.current.length === 0;
+        if (!shouldUseNativeHistory || (!shouldBootstrap && !hasNewNativeHistory)) {
+          return;
+        }
+
+        nativeHistoryLineCountRef.current = Math.max(nativeHistoryLineCountRef.current, lineCount);
+        const parsedLines = parseNativeHistoryToDisplayLines(
+          (res.history as any).format as string | undefined,
+          (res.history as any).lines as string[],
+        );
+        nativeLinesRef.current = parsedLines;
+        setOutputLines([...parsedLines, ...streamLinesRef.current]);
+      } catch {
+        // Keep the current output visible if native history polling fails.
+      }
+    };
+
+    void syncNativeHistory();
+    const timer = setInterval(() => {
+      void syncNativeHistory();
+    }, NATIVE_SYNC_POLL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    activeHostId,
+    hosts,
+    session?.hostId,
+    session?.id,
+    session?.origin,
+    session?.outputLines,
+    session?.resumeId,
+    session?.status,
+    session?.tool,
+    session?.workingDirectory,
+    sessionId,
+  ]);
 
   return outputLines;
 }
@@ -234,11 +374,16 @@ export function OpenVideGlasses() {
   const workspaces = useWorkspaces(sessions);
   const { hosts, activeHostId, hostStatuses, connectionStatus, ensureBridgeForSession, ensureBridgeForCommand, switchHost } = useBridge();
   const { data: settings } = useSettings();
+  const { data: prompts } = usePrompts();
   const [glassSettings, setGlassSettings] = useState(() => normalizeSettings(settings));
   const [sessionModePrefs, setSessionModePrefs] = useState<Record<string, string>>({});
   const [sessionModelPrefs, setSessionModelPrefs] = useState<Record<string, string>>({});
+  const [sessionReadNavPrefs, setSessionReadNavPrefs] = useState<Record<string, number>>({});
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceText, setVoiceText] = useState<string | null>(null);
+  const voice = useVoice();
+  useEffect(() => { voice.setListening(voiceListening); }, [voiceListening, voice]);
+  useEffect(() => { voice.setText(voiceText); }, [voiceText, voice]);
   const voiceReturnPathRef = useRef('/sessions');
   const settingsRef = useRef(glassSettings);
   settingsRef.current = glassSettings;
@@ -324,11 +469,28 @@ export function OpenVideGlasses() {
     if (preferred) return preferred;
     if (selectedSession?.model) return selectedSession.model;
     if (selectedSession?.tool === 'claude') return 'opus';
+    if (selectedSession?.tool === 'gemini') return 'gemini-2.5-pro';
     return '';
   }, [selectedSession?.model, selectedSession?.tool, sessionModelPrefs, urlParams.sessionId]);
+  const selectedSessionReadNavIndex = useMemo(
+    () => (urlParams.sessionId ? sessionReadNavPrefs[urlParams.sessionId] ?? null : null),
+    [sessionReadNavPrefs, urlParams.sessionId],
+  );
+  // Glass suggested prompts now come from the user-configured quick prompts library
+  // (daemon-stored, editable from the webview /prompts page).
+  const { data: configuredPrompts = [] } = usePrompts();
+  // Only user-configured prompts — built-in library defaults are hidden.
+  const customPromptsOnly = useMemo(
+    () => configuredPrompts.filter((p) => !p.isBuiltIn),
+    [configuredPrompts],
+  );
+  const suggestedPrompts = useMemo(
+    () => customPromptsOnly.slice(0, 4).map((p) => ({ id: p.id, label: p.label, prompt: p.prompt, source: 'heuristic' as const })),
+    [customPromptsOnly],
+  );
 
   // Subscribe to active session's output for glass chat display
-  const outputLines = useGlassOutputStream(urlParams.sessionId ?? null, sessions, ensureBridgeForSession);
+  const outputLines = useGlassOutputStream(urlParams.sessionId ?? null, sessions, ensureBridgeForSession, hosts, activeHostId);
 
   // Poll teams + team detail data + schedules
   const teams = useGlassTeams(hosts);
@@ -353,6 +515,7 @@ export function OpenVideGlasses() {
     selectedSessionId: urlParams.sessionId ?? null,
     selectedSessionMode,
     selectedSessionModel,
+    selectedSessionReadNavIndex,
     selectedWorkspace: urlParams.workspace ?? null,
     selectedWorkspaceHostId: urlParams.workspaceHost ?? null,
     outputLines: isViewingFile && fileContent ? fileContent.split('\n') : outputLines,
@@ -371,10 +534,11 @@ export function OpenVideGlasses() {
     browserPath: urlParams.browserPath,
     browserEntries: (browserEntries ?? []) as unknown as OpenVideSnapshot['browserEntries'],
     diffFiles: [],
-    prompts: [],
+    prompts: customPromptsOnly,
+    suggestedPrompts,
     ports: [],
     pendingResult: null,
-  }), [sessions, hosts, browserHostId, activeHostId, hostStatuses, workspaces, connectionStatus, urlParams, outputLines, voiceListening, voiceText, glassSettings, teams, teamTasks, teamMessages, teamPlan, scheduledTasks, browserEntries, activeTeamId, isViewingFile, fileContent, selectedSessionMode, selectedSessionModel]);
+  }), [sessions, hosts, browserHostId, activeHostId, hostStatuses, workspaces, connectionStatus, urlParams, outputLines, voiceListening, voiceText, glassSettings, teams, teamTasks, teamMessages, teamPlan, scheduledTasks, browserEntries, activeTeamId, isViewingFile, fileContent, prompts, suggestedPrompts, selectedSessionMode, selectedSessionModel, selectedSessionReadNavIndex]);
 
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
@@ -382,24 +546,30 @@ export function OpenVideGlasses() {
   const getSnapshot = useCallback(() => snapshotRef.current, []);
 
   const rpcWithSharedState = useCallback<OpenVideActions['rpc']>(async (cmd, params) => {
+    const nextParams: Record<string, unknown> = { ...(params ?? {}) };
+    let targetHostId = typeof nextParams.hostId === 'string' ? nextParams.hostId : null;
+    delete nextParams.hostId;
+
+    if (!targetHostId && typeof nextParams.id === 'string' && cmd.startsWith('session.')) {
+      targetHostId = sessions?.find((session) => session.id === nextParams.id)?.hostId ?? null;
+    }
+
     if (cmd === 'session.send') {
-      const sessionId = typeof params?.id === 'string' ? params.id : null;
+      const sessionId = typeof nextParams.id === 'string' ? nextParams.id : null;
       if (sessionId) {
         const modeOverride = sessionModePrefs[sessionId];
         const modelOverride = sessionModelPrefs[sessionId];
-        const nextParams: Record<string, unknown> = { ...(params ?? {}) };
         if (modeOverride && modeOverride !== 'auto' && typeof nextParams.mode !== 'string') {
           nextParams.mode = modeOverride;
         }
         if (modelOverride && typeof nextParams.model !== 'string') {
           nextParams.model = modelOverride;
         }
-        return rpc(cmd, nextParams);
       }
     }
 
     if (cmd !== 'settings.set') {
-      return rpc(cmd, params);
+      return rpcForHost(hosts, targetHostId ?? activeHostId, cmd, nextParams);
     }
 
     ensureBridgeForCommand();
@@ -422,7 +592,7 @@ export function OpenVideGlasses() {
     }
 
     try {
-      const res = await rpc(cmd, { ...params, settings: next });
+      const res = await rpc(cmd, { ...nextParams, settings: next });
       if (res.ok && res.settings) {
         const persisted = normalizeSettings(res.settings as Partial<typeof defaultSettings>);
         setGlassSettings(persisted);
@@ -445,10 +615,16 @@ export function OpenVideGlasses() {
     } catch {
       return { ok: false, error: 'Failed to persist settings immediately; keeping local value and retrying later.' };
     }
-  }, [ensureBridgeForCommand, queryClient, sessionModePrefs, sessionModelPrefs]);
+  }, [activeHostId, ensureBridgeForCommand, hosts, queryClient, sessionModePrefs, sessionModelPrefs, sessions]);
 
   const startVoice = useCallback(() => {
-    voiceReturnPathRef.current = `${location.pathname}${location.search}` || '/sessions';
+    const currentPath = `${location.pathname}${location.search}` || '/sessions';
+    if (location.pathname === '/prompt-select') {
+      const selectedSessionId = snapshotRef.current.selectedSessionId;
+      voiceReturnPathRef.current = selectedSessionId ? `/chat?id=${encodeURIComponent(selectedSessionId)}` : '/sessions';
+    } else {
+      voiceReturnPathRef.current = currentPath;
+    }
     setVoiceListening(true);
     setVoiceText(null);
     navigate(`${VOICE_ROUTE}${location.search}`);
@@ -513,6 +689,20 @@ export function OpenVideGlasses() {
       if (!sessionId) return;
       setSessionModelPrefs((current) => (current[sessionId] === model ? current : { ...current, [sessionId]: model }));
     },
+    setSessionReadNavIndex: (highlightedIndex: number | null) => {
+      const sessionId = snapshotRef.current.selectedSessionId;
+      if (!sessionId) return;
+      setSessionReadNavPrefs((current) => {
+        if (highlightedIndex == null) {
+          if (!(sessionId in current)) return current;
+          const next = { ...current };
+          delete next[sessionId];
+          return next;
+        }
+        if (current[sessionId] === highlightedIndex) return current;
+        return { ...current, [sessionId]: highlightedIndex };
+      });
+    },
     startVoice,
     stopVoice,
     submitVoice,
@@ -529,6 +719,20 @@ export function OpenVideGlasses() {
     const sessionId = snapshotRef.current.selectedSessionId;
     if (!sessionId) return;
     setSessionModelPrefs((current) => (current[sessionId] === model ? current : { ...current, [sessionId]: model }));
+  };
+  ctxRef.current.setSessionReadNavIndex = (highlightedIndex: number | null) => {
+    const sessionId = snapshotRef.current.selectedSessionId;
+    if (!sessionId) return;
+    setSessionReadNavPrefs((current) => {
+      if (highlightedIndex == null) {
+        if (!(sessionId in current)) return current;
+        const next = { ...current };
+        delete next[sessionId];
+        return next;
+      }
+      if (current[sessionId] === highlightedIndex) return current;
+      return { ...current, [sessionId]: highlightedIndex };
+    });
   };
   ctxRef.current.startVoice = startVoice;
   ctxRef.current.stopVoice = stopVoice;

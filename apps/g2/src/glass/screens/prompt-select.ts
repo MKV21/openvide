@@ -10,9 +10,11 @@ import type { OpenVideSnapshot, OpenVideActions } from '../types';
 export const promptSelectScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = {
   display: (snap, nav) => {
     const count = snap.prompts.length;
-    // First item is always Voice Input, then prompts
     const allItems = [
       { id: '__voice__', label: 'Voice Input', prompt: '', isBuiltIn: true },
+      // `snap.prompts` is already the deduplicated user-configured list. The
+      // earlier snap.suggestedPrompts branch showed the same entries again with
+      // an "AI " prefix, which doubled every prompt.
       ...snap.prompts,
     ];
 
@@ -33,7 +35,8 @@ export const promptSelectScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> 
   },
 
   action: (action, nav, snap, ctx) => {
-    const totalItems = snap.prompts.length + 1;
+    const promptItems = [...snap.prompts];
+    const totalItems = promptItems.length + 1;
     if (action.type === 'HIGHLIGHT_MOVE') {
       const max = Math.max(0, totalItems - 1);
       const idx = action.direction === 'down'
@@ -46,7 +49,7 @@ export const promptSelectScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> 
         ctx.startVoice();
         return nav;
       }
-      const prompt = snap.prompts[nav.highlightedIndex - 1];
+      const prompt = promptItems[nav.highlightedIndex - 1];
       if (prompt && snap.selectedSessionId) {
         ctx.rpc('session.send', { id: snap.selectedSessionId, prompt: prompt.prompt });
         ctx.navigate(`/chat?id=${snap.selectedSessionId}`);
@@ -54,7 +57,11 @@ export const promptSelectScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> 
       return { ...nav, highlightedIndex: 0 };
     }
     if (action.type === 'GO_BACK') {
-      ctx.navigate('/sessions');
+      if (snap.selectedSessionId) {
+        ctx.navigate(`/chat?id=${encodeURIComponent(snap.selectedSessionId)}`);
+      } else {
+        ctx.navigate('/sessions');
+      }
       return { ...nav, highlightedIndex: 0 };
     }
     return nav;

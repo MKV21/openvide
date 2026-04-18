@@ -31,6 +31,35 @@ interface ProviderBadgeProps {
   className?: string;
 }
 
+/**
+ * Gemini's 4-pointed sparkle mark as an inline SVG so we don't need to ship
+ * PNG assets for the logo. Renders with the official blue→violet gradient.
+ */
+function GeminiMark({ size }: { size: number }) {
+  return (
+    <svg
+      width={Math.round(size * 0.62)}
+      height={Math.round(size * 0.62)}
+      viewBox="0 0 100 100"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-label="Gemini"
+    >
+      <defs>
+        <linearGradient id="gemini-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#4796E3" />
+          <stop offset="40%" stopColor="#8B69DD" />
+          <stop offset="100%" stopColor="#D96570" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M50 0 C50 27.6142 72.3858 50 100 50 C72.3858 50 50 72.3858 50 100 C50 72.3858 27.6142 50 0 50 C27.6142 50 50 27.6142 50 0 Z"
+        fill="url(#gemini-grad)"
+      />
+    </svg>
+  );
+}
+
 export function ProviderBadge({ provider, size = 32, className }: ProviderBadgeProps) {
   const color = providerColors[provider] ?? 'var(--color-text-dim)';
   const letter = providerLetters[provider] ?? provider.charAt(0).toUpperCase();
@@ -58,6 +87,8 @@ export function ProviderBadge({ provider, size = 32, className }: ProviderBadgeP
             borderRadius: Math.round(size * 0.31),
           }}
         />
+      ) : provider === 'gemini' ? (
+        <GeminiMark size={size} />
       ) : (
         <span
           className="font-normal"

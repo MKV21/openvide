@@ -97,6 +97,12 @@ function getActionBarState(
   };
 }
 
+function isReadNavIndex(highlightedIndex: number | null | undefined): highlightedIndex is number {
+  if (typeof highlightedIndex !== 'number' || !Number.isFinite(highlightedIndex)) return false;
+  const mode = chatMode.getMode(highlightedIndex);
+  return mode === 'read' || mode === 'readOpen';
+}
+
 /** A logical block in the chat — each block is one navigable item. */
 interface ChatBlock {
   kind: 'prompt' | 'text' | 'tool' | 'thinking' | 'error';
@@ -320,9 +326,20 @@ function wrapLine(text: string, maxChars: number): string[] {
   return lines;
 }
 
+function isEffectiveHostConnected(snap: OpenVideSnapshot, hostId?: string | null): boolean {
+  const effectiveHostId = hostId ?? snap.selectedWorkspaceHostId ?? snap.selectedHostId ?? null;
+  if (!effectiveHostId) {
+    return snap.hosts.some((host) => snap.hostStatuses[host.id] === 'connected');
+  }
+  return snap.hostStatuses[effectiveHostId] === 'connected';
+}
+
 export const liveOutputScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = {
   display: (snap, nav) => {
     const sessionMeta = resolveGlassSessionMeta(snap);
+    const selectedSession = snap.selectedSessionId
+      ? snap.sessions.find((session) => session.id === snap.selectedSessionId) ?? null
+      : null;
     const tool = sessionMeta.tool?.toUpperCase() ?? 'AI';
     const model = sessionMeta.model ? truncate(sessionMeta.model, 10) : '';
     const status = sessionMeta.status;
@@ -352,14 +369,22 @@ export const liveOutputScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = 
 
     const blocks = buildBlocks(snap.outputLines);
     const lastBlock = blocks[blocks.length - 1];
-    const showProcessing = status === 'running' && (!lastBlock || lastBlock.kind === 'prompt');
-    const contentSlots = showProcessing ? 6 : 7;
+    // Show the thinking indicator whenever the last block is a user prompt
+    // and no assistant content has arrived yet. Tool-agnostic — Claude streams
+    // while `status === 'running'`, but Codex/Gemini often respond in one shot
+    // (and external CLI writes keep `status === 'idle'` entirely), so relying
+    // only on `status === 'running'` would miss those cases.
+    const showProcessing = !!lastBlock && lastBlock.kind === 'prompt';
+    const selectedHostConnected = isEffectiveHostConnected(snap, selectedSession?.hostId);
+    const showOfflineWarning = !selectedHostConnected;
+    // One row reserved vs. raw grid so the last line isn't clipped by the glass display.
+    const contentSlots = showProcessing ? 5 : 6;
 
     if (blocks.length === 0) {
       return {
         lines: [
-          ...compactHeader(title, actionBar),
-          line(showProcessing ? `* ${getThinkingVerb()}...` : '  Waiting for output...', 'meta'),
+          ...compactHeader(title, actionBar, showOfflineWarning ? '! offline' : undefined),
+          line(showProcessing ? `* ${getThinkingVerb()}...` : '  Waiting for input...', 'meta'),
         ],
       };
     }
@@ -371,11 +396,13 @@ export const liveOutputScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = 
 
     const rendered = renderBlocksLineMode(blocks, readLineIdx, expandedBlockIdx, isReadMode, contentSlots);
 
-    const headerLines = compactHeader(title, actionBar);
-    const contentLines = rendered.map(r => {
-      if (r.text === '__SEP__') return separator();
-      return line(r.text, 'normal', r.isCursorLine);
-    });
+    const headerLines = compactHeader(title, actionBar, showOfflineWarning ? '! offline' : undefined);
+    const contentLines = [
+      ...rendered.map(r => {
+        if (r.text === '__SEP__') return separator();
+        return line(r.text, 'normal', r.isCursorLine);
+      }),
+    ];
 
     if (showProcessing) {
       contentLines.push(line(''));
@@ -402,15 +429,27 @@ export const liveOutputScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = 
       if (action.type === 'SELECT_HIGHLIGHTED') {
         const btnIdx = clampIndex(nav.highlightedIndex, buttons.length);
         if (btnIdx === 0) {
-          // Input
-          ctx.startVoice();
+          if (snap.selectedSessionId && (snap.suggestedPrompts.length > 0 || snap.prompts.length > 0)) {
+            ctx.navigate(`/prompt-select?session=${encodeURIComponent(snap.selectedSessionId)}`);
+          } else {
+            ctx.startVoice();
+          }
           return nav;
         }
         if (btnIdx === 1) {
+          const storedReadIndex = isReadNavIndex(snap.selectedSessionReadNavIndex)
+            ? snap.selectedSessionReadNavIndex
+            : null;
+          if (storedReadIndex != null) {
+            return { ...nav, highlightedIndex: storedReadIndex };
+          }
+
           // Read: enter read mode at last block
           const allLines = buildAllLines(blocks, -1);
           const lastLine = Math.max(0, allLines.length - 1);
-          return { ...nav, highlightedIndex: chatMode.encode('read', lastLine) };
+          const nextHighlightedIndex = chatMode.encode('read', lastLine);
+          ctx.setSessionReadNavIndex(nextHighlightedIndex);
+          return { ...nav, highlightedIndex: nextHighlightedIndex };
         }
         if (btnIdx === 2) {
           // Mode: enter mode selection (scroll through modes)
@@ -439,7 +478,9 @@ export const liveOutputScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = 
       if (action.type === 'HIGHLIGHT_MOVE') {
         // Line-by-line scrolling — keep current expand state
         const newLine = moveHighlight(lineIdx, action.direction, maxLine);
-        return { ...nav, highlightedIndex: chatMode.encode(mode as any, newLine) };
+        const nextHighlightedIndex = chatMode.encode(mode as any, newLine);
+        ctx.setSessionReadNavIndex(nextHighlightedIndex);
+        return { ...nav, highlightedIndex: nextHighlightedIndex };
       }
       if (action.type === 'SELECT_HIGHLIGHTED') {
         // Tap toggles expand/collapse of the block at current line
@@ -448,17 +489,24 @@ export const liveOutputScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = 
         // Only toggle collapsible blocks (thinking, tool)
         if (block && (block.kind === 'thinking' || block.kind === 'tool')) {
           if (mode === 'read') {
-            return { ...nav, highlightedIndex: chatMode.encode('readOpen', lineIdx) };
+            const nextHighlightedIndex = chatMode.encode('readOpen', lineIdx);
+            ctx.setSessionReadNavIndex(nextHighlightedIndex);
+            return { ...nav, highlightedIndex: nextHighlightedIndex };
           } else {
-            return { ...nav, highlightedIndex: chatMode.encode('read', lineIdx) };
+            const nextHighlightedIndex = chatMode.encode('read', lineIdx);
+            ctx.setSessionReadNavIndex(nextHighlightedIndex);
+            return { ...nav, highlightedIndex: nextHighlightedIndex };
           }
         }
         return nav;
       }
       if (action.type === 'GO_BACK') {
         if (mode === 'readOpen') {
-          return { ...nav, highlightedIndex: chatMode.encode('read', lineIdx) };
+          const nextHighlightedIndex = chatMode.encode('read', lineIdx);
+          ctx.setSessionReadNavIndex(nextHighlightedIndex);
+          return { ...nav, highlightedIndex: nextHighlightedIndex };
         }
+        ctx.setSessionReadNavIndex(nav.highlightedIndex);
         return { ...nav, highlightedIndex: 0 };
       }
       return nav;
