@@ -20,6 +20,11 @@ import type {
 const runningProcesses = new Map<string, RunningProcess>();
 const pendingPermissionResponders = new Map<string, (decision: PermissionDecision) => Promise<void>>();
 let state: DaemonState = { version: 1, sessions: {} };
+let spawnCodexAppServerTurnImpl: typeof spawnCodexAppServerTurn = spawnCodexAppServerTurn;
+
+export function setCodexAppServerTurnSpawnerForTest(spawner?: typeof spawnCodexAppServerTurn): void {
+  spawnCodexAppServerTurnImpl = spawner ?? spawnCodexAppServerTurn;
+}
 
 const BUILT_IN_PROMPTS: PromptRecord[] = [
   {
@@ -557,7 +562,7 @@ export function sendTurn(id: string, prompt: string, turnOpts?: { mode?: string;
     };
 
     if (backend === "codex_app_server") {
-      return spawnCodexAppServerTurn(
+      return spawnCodexAppServerTurnImpl(
         session,
         prompt,
         { mode: turnOpts?.mode, model: effectiveModel, permissionMode: session.permissionMode ?? "auto" },
@@ -577,7 +582,7 @@ export function sendTurn(id: string, prompt: string, turnOpts?: { mode?: string;
             };
           }
           if (session.status === "awaiting_approval") {
-            session.status = "running";
+            session.status = status === "cancelled" ? "cancelled" : "running";
           }
           session.updatedAt = nowISO();
           pendingPermissionResponders.delete(permissionKey(id, requestId));
