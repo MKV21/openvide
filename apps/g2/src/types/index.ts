@@ -1,3 +1,28 @@
+export type PermissionDecision = 'approve_once' | 'reject' | 'abort_run';
+export type PermissionRequestOptionKind = PermissionDecision | 'reply';
+export type PermissionRequestKind = 'command' | 'file_write' | 'network' | 'dangerous_action' | 'generic';
+export type PermissionRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled' | 'expired';
+
+export interface PendingPermissionRequest {
+  requestId: string;
+  kind: PermissionRequestKind;
+  status: PermissionRequestStatus;
+  title: string;
+  description?: string;
+  command?: string;
+  files?: string[];
+  reason?: string;
+  risk?: 'low' | 'medium' | 'high';
+  options?: Array<{
+    id: string;
+    label: string;
+    kind: PermissionRequestOptionKind;
+  }>;
+  createdAt: string;
+  source: 'codex_app_server';
+  backendMethod: string;
+}
+
 export interface WebSession {
   id: string;
   hostId?: string;
@@ -19,6 +44,7 @@ export interface WebSession {
   title?: string;
   summary?: string;
   messageCount?: number;
+  pendingPermission?: PendingPermissionRequest;
 }
 
 export interface WebWorkspace {
