@@ -1,7 +1,8 @@
 # Implementation notes: permission prompts in OpenVide
 
-Status: draft
+Status: backend patch in progress
 Date: 2026-04-18
+Last updated: 2026-04-19
 Related: `docs/spec-permission-prompts.md`
 
 ## Goal
@@ -22,6 +23,53 @@ Do not implement yet:
 - policy engine
 - scheduled/team-run approvals
 - multi-request queues
+
+## Updated implementation finding
+
+Local Codex app-server bindings show that Codex already has structured approval
+requests. Therefore V1 should not begin with CLI output parsing.
+
+Use Codex app-server first:
+- set Ask mode through `thread/start` or `turn/start`
+- receive server-initiated approval requests
+- persist one pending request on the daemon session
+- answer the original app-server JSON-RPC request when the user decides
+
+The biggest current backend gap is in `apps/daemon/src/codexAppServerRunner.ts`:
+- messages with an `id` are treated as responses to daemon-initiated requests
+- if the `id` is not in the local `pending` map, the message is ignored
+- server-initiated app-server requests also have an `id`
+- approval request handling must distinguish JSON-RPC responses from
+  JSON-RPC requests
+
+## Backend checkpoint 2026-04-19
+
+Implemented in the current patch:
+- daemon session model has `permissionMode: "auto" | "ask"`
+- daemon session status has `awaiting_approval`
+- daemon session state can persist one `pendingPermission`
+- `permissionMode: "ask"` forces Codex to use app-server instead of CLI
+- Ask mode starts Codex app-server with `approvalPolicy: "on-request"`,
+  `approvalsReviewer: "user"`, and explicit workspace-write sandbox settings
+- Auto mode keeps the current behavior:
+  - Codex CLI still uses `--full-auto`
+  - Codex app-server still uses `approvalPolicy: "never"`
+- `codexAppServerRunner` distinguishes app-server JSON-RPC responses from
+  server-initiated requests
+- app-server approval requests are normalized into `permission_request` output
+  events and stored as `session.pendingPermission`
+- daemon exposes `session.permission.respond`
+- CLI exposes:
+  - `openvide-daemon session create --permission-mode ask`
+  - `openvide-daemon session permission --id <id> --request-id <id> --decision <approve_once|reject|abort_run>`
+- Ask mode refuses the previous CLI auto-fallback if app-server cannot attach
+
+Still not implemented:
+- main app approval card
+- G2 web approval card
+- glasses-specific approval screen
+- approve-for-session / policy amendments
+- multi-request queue
 
 ## Current relevant files
 
@@ -48,6 +96,17 @@ Do not implement yet:
 
 ## Minimal architecture
 
+## 0. Prove the Codex app-server request loop
+
+Before UI work, add or run a narrow daemon/backend spike that proves:
+- OpenVide starts a Codex app-server thread with approval enabled.
+- Codex emits a server-initiated approval request for a blocked command.
+- OpenVide captures the request and stores it as pending session state.
+- OpenVide answers the exact request id with approve/reject/cancel.
+- Codex resumes or stops according to the decision.
+
+Do not build app or glasses cards until this loop works in the daemon.
+
 ## 1. Add a daemon-native pending permission model
 
 ### In `apps/daemon/src/types.ts`
@@ -73,22 +132,46 @@ Keep V1 narrow. Do not over-model file/network variants yet.
 
 ## 2. Teach Codex runner to emit structured permission requests
 
-### Main question
-Best path is to find whether Codex app-server already surfaces structured approval events.
+### In `apps/daemon/src/codexAppServerRunner.ts`
+Map Codex app-server approval requests directly.
 
-If yes:
-- map those directly in `apps/daemon/src/codexAppServerRunner.ts`
-- when approval event arrives:
-  - store `session.pendingPermission`
-  - set session status to `awaiting_approval`
-  - emit normalized stream event `permission_request`
+Known request methods from generated local bindings:
+- `item/commandExecution/requestApproval`
+- `item/fileChange/requestApproval`
+- `item/permissions/requestApproval`
+- `execCommandApproval`
+- `applyPatchApproval`
 
-If not:
-- temporary fallback: parse specific Codex output patterns in either:
-  - `apps/daemon/src/codexAppServerRunner.ts`, or
-  - `apps/daemon/src/normalizedParser.ts`
-- but only for known structured-looking permission cases
-- avoid broad fragile prose parsing if possible
+V1 should implement command approval first:
+- normalize `item/commandExecution/requestApproval`
+- optionally normalize legacy `execCommandApproval`
+- store one pending permission request on the session
+- set session status to `awaiting_approval`
+- emit a normalized `permission_request` output event
+
+Do not parse broad prose from stdout/stderr for V1 unless server diagnostics
+prove that app-server approval requests are unavailable on the deployment.
+
+### Required JSON-RPC handling change
+The app-server line handler must distinguish:
+- response to a daemon-initiated request: has `id`, no `method`, matches
+  `pending`
+- server-initiated request: has `id`, `method`, and `params`
+- notification: has `method` and `params`, no request `id`
+
+The second case is missing today and is the core unlock for Ask mode.
+
+### Starting Ask-mode Codex turns
+When `permissionMode === "ask"`:
+- new `thread/start` should include `approvalPolicy: "on-request"` or the
+  selected granular equivalent
+- use `approvalsReviewer: "user"`
+- set an explicit sandbox policy
+
+When `permissionMode === "auto"`:
+- keep current behavior for now:
+  - CLI uses `--full-auto`
+  - app-server uses `approvalPolicy: "never"`
 
 ## 3. Add a daemon RPC for user decisions
 
@@ -99,22 +182,32 @@ Add method:
 Input:
 ```ts
 {
-  sessionId: string;
+  id: string; // `sessionId` is also acceptable for callers that use that name
   requestId: string;
-  decision: "approve_once" | "reject" | "abort_run" | "reply";
-  replyText?: string;
+  decision: "approve_once" | "reject" | "abort_run";
 }
 ```
 
 Behavior:
 - validate matching pending request
-- forward decision to the running Codex session
+- answer the original pending Codex app-server JSON-RPC request
 - clear or update `pendingPermission`
 - move session back to `running` or terminal state
 
 ### Important
 This method should be idempotent.
 If the request is already resolved, return a harmless success or a typed already-resolved result.
+
+Suggested decision mapping for command approval:
+- `approve_once` -> `accept`
+- `reject` -> `decline`
+- `abort_run` -> `cancel`
+
+Later:
+- session-scoped approvals can map to `acceptForSession`
+- policy amendments can map to the app-server amendment decision shapes
+- text `reply` should be added with the general clarification-input flow, not
+  mixed into the first Codex permission-response path
 
 ## 4. Extend app-side message model
 
@@ -236,20 +329,43 @@ Implementation idea:
 
 ## Minimal patch order
 
+### Patch 0
+Backend proof only
+- add temporary instrumentation or a narrow test path for Codex app-server
+  approval requests
+- confirm a real request can be received and answered
+- do not touch UI yet
+
+Current status: implemented as the daemon Ask-mode path, still needs target
+server validation.
+
 ### Patch 1
 Backend types and session state
 - add `awaiting_approval`
 - add `pendingPermission`
 
+Current status: implemented.
+
 ### Patch 2
 Backend event emission
-- Codex runner emits `permission_request`
+- Codex app-server runner handles server-initiated JSON-RPC approval requests
+- Codex runner emits normalized `permission_request`
 - daemon stores pending request
+
+Current status: implemented for Codex app-server request methods:
+- `item/commandExecution/requestApproval`
+- `item/fileChange/requestApproval`
+- `item/permissions/requestApproval`
+- `execCommandApproval`
+- `applyPatchApproval`
 
 ### Patch 3
 Backend response path
 - add `session.permission.respond`
+- JSON-RPC response back to Codex app-server
 - resume/abort/reject logic
+
+Current status: implemented with CLI access for manual testing.
 
 ### Patch 4
 Main app UI
@@ -270,10 +386,13 @@ Glasses refinement
 
 ## Likely technical risks
 
-1. Codex app-server may not expose approval callbacks cleanly.
-2. CLI parsing may be needed as a bridge and could be brittle.
-3. G2 message model is currently simpler than the main app and may need quick extension.
-4. Reconnect/state replay can get messy if pending approval lives only in transient stream events.
+1. Server deployment may run a different Codex version/schema than local dev.
+2. The app-server request must stay pending while the UI decision is outstanding;
+   timeouts must not accidentally reject it too early.
+3. CLI parsing may still be needed as a bridge if app-server Ask mode fails on
+   the target host.
+4. G2 message model is currently simpler than the main app and may need quick extension.
+5. Reconnect/state replay can get messy if pending approval lives only in transient stream events.
 
 ## Strong recommendation
 

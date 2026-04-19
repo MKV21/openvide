@@ -2,6 +2,7 @@
 
 Status: draft
 Date: 2026-04-18
+Last updated: 2026-04-19
 Related:
 - `docs/spec-permission-prompts.md`
 - `docs/implementation-notes-permission-prompts.md`
@@ -14,6 +15,55 @@ Before implementing interactive permission prompts, verify the exact runtime beh
 
 The big risk is building a pretty UI flow for a backend that cannot actually pause, emit structured permission requests, or resume cleanly. This file is the reality check before code surgery.
 
+## Current preflight result
+
+Local preflight changed the preferred V1 path:
+- Codex app-server generated bindings show structured approval support.
+- `thread/start` and `turn/start` support `approvalPolicy`.
+- supported policies include `on-request`, `on-failure`, `untrusted`,
+  granular policy config, and `never`.
+- app-server can initiate command/file/permission approval requests and expects
+  JSON-RPC responses.
+
+OpenVide currently does not use that path:
+- CLI Codex is started with `--full-auto`.
+- app-server Codex is started with `approvalPolicy: "never"`.
+- session creation paths frequently set `autoAccept: true`.
+- the app-server runner currently ignores unknown `id` messages, which is a
+  problem because server-initiated requests also carry an `id`.
+
+Server preflight is still required because the target server may have a
+different Codex version, config, user, PATH, or workspace permissions.
+
+## Server preflight result
+
+Observed on the target server:
+- `codex exec --sandbox workspace-write ...` failed in `/home/mike/repos/test`
+  with `Not inside a trusted directory and --skip-git-repo-check was not
+  specified.`
+- Re-running with `--skip-git-repo-check` succeeded and created the requested
+  test file.
+
+Interpretation:
+- the server user and workspace can execute Codex with `workspace-write`
+- the first failure was the Codex trust/repo guard, not a filesystem write
+  permission failure
+- OpenVide's CLI path already passes `--skip-git-repo-check`, so remaining
+  permission/approval failures should be treated as OpenVide runtime behavior
+  unless app-server-specific server diagnostics show otherwise
+
+Current OpenVide behavior observed with the existing implementation:
+- writing a file in the current workspace works
+- writing a file under `/tmp` also works on this server
+- running `curl -s https://example.com > openvide-curl-test.txt` does not work
+- no first-class permission prompt is surfaced for the network case
+
+Interpretation:
+- `/tmp` is not a reliable approval trigger on this deployment
+- network access is the current clean reproducer for missing Ask-mode behavior
+- the first backend proof should use a network command or another action that
+  the sandbox blocks under current Auto mode
+
 ## Preflight checklist
 
 ## 1. Codex app-server approval capability
@@ -21,13 +71,23 @@ The big risk is building a pretty UI flow for a backend that cannot actually pau
 ### Question
 Can Codex app-server emit structured approval or permission-request events?
 
+### Current answer
+Yes on the local machine used for this preflight.
+
+Generated Codex app-server TypeScript bindings include:
+- `AskForApproval`
+- `ApprovalsReviewer`
+- `CommandExecutionRequestApprovalParams`
+- `CommandExecutionRequestApprovalResponse`
+- `FileChangeRequestApprovalParams`
+- `PermissionsRequestApprovalParams`
+- legacy `ExecCommandApprovalParams`
+
 ### What to verify
-- whether `thread/start` supports approval modes other than `"never"`
-- whether `turn/start` can yield a structured event like:
-  - permission request
-  - confirmation needed
-  - command approval required
-- whether there is an official method to continue after approval
+- whether the server deployment exposes the same generated schema
+- whether `thread/start` with `approvalPolicy: "on-request"` works there
+- whether a command that needs approval emits a server-initiated request
+- whether answering that request resumes the turn
 
 ### Why it matters
 If app-server already supports this, we should use it directly.
@@ -39,6 +99,15 @@ If not, V1 may need either:
 
 ### Question
 How does a user decision get sent back to Codex?
+
+### Current answer
+For app-server Ask mode, the daemon should answer the original server-initiated
+JSON-RPC request id.
+
+For command approval, decision mapping should start as:
+- approve once -> `accept`
+- reject -> `decline`
+- abort run -> `cancel`
 
 ### What to verify
 - dedicated RPC method for approve/reject
@@ -66,6 +135,14 @@ V1 should strongly prefer exactly one pending request per session. If the runtim
 
 ### Question
 Do Codex CLI and Codex app-server expose similar approval semantics?
+
+### Current answer
+CLI parity is no longer the preferred first path.
+
+The local `codex exec --help` exposes `--full-auto`, `--sandbox`, and
+`--dangerously-bypass-approvals-and-sandbox`, but not a daemon-friendly
+interactive approval protocol. OpenVide also closes stdin for CLI runs, so
+plain terminal prompts cannot be mediated by the current daemon.
 
 ### What to verify
 - CLI behavior when permission approval is needed
@@ -154,12 +231,120 @@ What should happen when Ask mode is selected but the backend cannot support an a
 Do **not** silently downgrade from Ask to Auto.
 If Ask mode is unsupported for a given backend path, show a clear message.
 
+Recommended V1 fallback:
+- if Ask mode is requested and app-server approval cannot be enabled, fail the
+  session start/send with an explicit error
+- do not switch to `--full-auto`
+- do not switch to `approvalPolicy: "never"`
+
+## Server commands to run before patching
+
+Run these on the target server as the same user that starts
+`openvide-daemon`:
+
+```bash
+whoami
+which codex
+codex --version
+codex exec --help
+codex app-server --help
+```
+
+Then test basic workspace permissions from the intended working directory:
+
+```bash
+pwd
+ls -ld .
+codex exec --sandbox workspace-write "Create a file named openvide-codex-permission-test.txt in the current directory, then stop."
+```
+
+If that fails directly in the terminal, fix server user/workspace/Codex config
+first. If it succeeds directly but fails through OpenVide, patch OpenVide.
+
+## Server commands to run after backend patch
+
+Use the same workspace that reproduced the missing network approval behavior.
+
+Create an Ask-mode Codex session:
+
+```bash
+openvide-daemon session create \
+  --tool codex \
+  --cwd /home/mike/repos/test \
+  --permission-mode ask
+```
+
+Send a prompt that should need network permission under workspace-write
+sandboxing:
+
+```bash
+openvide-daemon session send \
+  --id <session-id> \
+  --prompt 'Run curl -s https://example.com > openvide-curl-test.txt and then stop.'
+```
+
+Watch the stream until a `permission_request` event appears:
+
+```bash
+openvide-daemon session stream --id <session-id> --follow
+```
+
+Fetch session state if needed:
+
+```bash
+openvide-daemon session get --id <session-id>
+```
+
+The session should show:
+- `status: "awaiting_approval"`
+- `pendingPermission.status: "pending"`
+- `pendingPermission.requestId`
+- a command or network permission description
+
+Approve once:
+
+```bash
+openvide-daemon session permission \
+  --id <session-id> \
+  --request-id '<pendingPermission.requestId>' \
+  --decision approve_once
+```
+
+Alternative reject path:
+
+```bash
+openvide-daemon session permission \
+  --id <session-id> \
+  --request-id '<pendingPermission.requestId>' \
+  --decision reject
+```
+
+Alternative abort path:
+
+```bash
+openvide-daemon session permission \
+  --id <session-id> \
+  --request-id '<pendingPermission.requestId>' \
+  --decision abort_run
+```
+
+Expected result:
+- approve once sends the matching JSON-RPC response back to Codex app-server
+  and the turn continues
+- reject maps to the app-server decline decision
+- abort maps to cancel and interrupts the turn
+- Ask mode must not silently fall back to `--full-auto`
+
 ## Recommended decision gates
 
 ## Gate A: backend capability
-Proceed only after one of these is true:
-- Codex app-server supports structured approval events, or
-- Codex CLI can be mediated well enough for V1 Ask mode.
+Proceed only after this is true:
+- the target server's Codex app-server supports structured approval requests
+  and OpenVide can answer one.
+
+Fallback gate:
+- if app-server Ask mode is unavailable on the target server, only then
+  evaluate whether Codex CLI can be mediated well enough for V1 Ask mode.
 
 ## Gate B: persistence
 Proceed only if pending approval can be stored in daemon session state and replayed on reconnect.
@@ -182,7 +367,8 @@ Stop and rethink if any of these are true:
 After preflight, we know one of these is the right V1 path:
 
 ### Path 1, ideal
-Codex app-server has structured approval hooks.
+Codex app-server has structured approval hooks and the server deployment
+matches local behavior.
 
 ### Path 2, acceptable
 Codex CLI is the only viable Ask-mode backend for now.
@@ -192,8 +378,8 @@ We ship a narrow parser-based Codex V1 while keeping the protocol normalized abo
 
 ## Suggested execution order
 
-1. Inspect Codex app-server approval capabilities.
-2. Inspect Codex CLI approval behavior.
+1. Verify the server Codex version and app-server schema.
+2. Prove one app-server approval request can be received and answered.
 3. Choose backend path for Ask mode.
 4. Confirm persistence strategy.
 5. Confirm app and G2 rendering feasibility.

@@ -2,7 +2,13 @@
 
 Status: draft
 Date: 2026-04-18
+Last updated: 2026-04-19
 Owner: MKV21 fork draft
+
+Implementation note 2026-04-19:
+- The backend Ask-mode slice is now represented in daemon code.
+- UI surfaces are still pending.
+- Auto mode remains the default-compatible path.
 
 ## Goal
 
@@ -20,6 +26,25 @@ Current OpenVide behavior is largely non-interactive:
 - Codex CLI runs with `--full-auto`
 - Codex app-server starts threads with `approvalPolicy: "never"`
 - Gemini runs with `-y`
+
+Current repo evidence:
+- `apps/daemon/src/commandBuilder.ts` builds Codex CLI commands with
+  `codex exec --json --full-auto --skip-git-repo-check`.
+- `apps/daemon/src/codexAppServerRunner.ts` starts new Codex app-server
+  threads with `approvalPolicy: "never"`.
+- `apps/g2` creates sessions with `autoAccept: true` in multiple flows.
+- The CLI runner closes stdin after spawning the process, so plain interactive
+  terminal prompts cannot be answered through the current daemon process.
+
+Confirmed local Codex app-server capability:
+- generated app-server TypeScript bindings include `approvalPolicy` on
+  `thread/start` and `turn/start`
+- supported approval policies include `untrusted`, `on-failure`,
+  `on-request`, granular approval config, and `never`
+- server-initiated approval requests exist for command execution, file
+  changes, permission requests, patch approval, and exec approval
+- those server requests carry an `id`, `method`, and `params`; the client must
+  answer with a matching JSON-RPC response
 
 So today there is no first-class product flow for:
 - agent asks for permission
@@ -253,9 +278,27 @@ UI must only understand OpenVide's normalized permission event, not tool-specifi
 ### Phase 1: Codex-first
 Implement this first for Codex, because that is the immediate pain point.
 
-Possible sources:
-- Codex app-server may expose structured approval hooks or events
-- if not, Codex CLI output may need controlled parsing until a structured hook exists
+Primary source:
+- Codex app-server structured server requests.
+
+Relevant app-server request methods observed in generated local bindings:
+- `item/commandExecution/requestApproval`
+- `item/fileChange/requestApproval`
+- `item/permissions/requestApproval`
+- `execCommandApproval`
+- `applyPatchApproval`
+
+Important implementation detail:
+- These are server-initiated JSON-RPC requests, not notifications.
+- They include an `id` and must be answered by the OpenVide daemon client.
+- The current `codexAppServerRunner` treats unknown `id` messages as stale
+  responses and returns early, so approval requests will likely be ignored
+  until that request path is added.
+
+CLI fallback:
+- Codex CLI output parsing should not be the first implementation path.
+- Use it only if the server deployment proves the app-server approval request
+  path is unavailable or unusable for the installed Codex version.
 
 Important rule:
 - structured runtime hooks preferred
@@ -278,6 +321,17 @@ Behavior:
   - current behavior, e.g. full-auto / skip permissions / yes mode
 - `ask`
   - use approval-capable path and surface prompts to UI
+
+Codex V1 mapping:
+- `auto` keeps the current Codex behavior:
+  - CLI: `--full-auto`
+  - app-server: `approvalPolicy: "never"`
+- `ask` should prefer Codex app-server:
+  - `approvalPolicy: "on-request"` or an equivalent granular policy
+  - `approvalsReviewer: "user"`
+  - explicit sandbox policy rather than relying on defaults
+- If app-server Ask mode is unavailable on the host, fail visibly instead of
+  silently downgrading to Auto mode.
 
 This should be configurable in:
 - app settings for default tool behavior
@@ -349,6 +403,12 @@ Reason:
 
 ## V1 implementation slices
 
+### Slice 0: backend proof
+- verify the server's installed Codex version exposes app-server approval
+  requests
+- prove OpenVide can receive one server-initiated approval request
+- prove OpenVide can answer it with a JSON-RPC response and the turn resumes
+
 ### Slice 1: data model
 - add `awaiting_approval` session status
 - add `permission_request` block type
@@ -364,7 +424,9 @@ Reason:
 - wire app and G2 actions to it
 
 ### Slice 4: Codex backend
-- detect native Codex permission requests
+- start Codex app-server Ask mode with an approval-capable policy
+- detect native Codex app-server permission requests
+- answer the original app-server request id after the user decision
 - map them to normalized events
 - pause and resume correctly
 
@@ -374,8 +436,10 @@ Reason:
 
 ## Open questions
 
-1. Does Codex app-server already expose approval callbacks/events that OpenVide can subscribe to?
-2. If not, should Ask mode force Codex onto a CLI path first?
+1. Does the server deployment run a Codex version with the same app-server
+   approval request schema as the local machine?
+2. Which exact app-server approval policy should be used for V1:
+   `on-request`, `untrusted`, or a granular policy?
 3. Should file-write approvals show full diffs in V1, or only filenames plus optional details?
 4. Should glasses support text reply in V1, or only approve/reject/abort?
 5. Should bridge/API callers also be able to answer permission prompts remotely?
