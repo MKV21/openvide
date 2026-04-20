@@ -16,6 +16,7 @@ export type Action =
   | { type: 'VOICE_INTERIM'; text: string }
   | { type: 'VOICE_FINAL'; text: string }
   | { type: 'VOICE_ERROR'; error: string }
+  | { type: 'VOICE_STATUS'; status: 'loading' | 'listening' | 'processing' | 'idle' | 'error'; detail?: string }
   | { type: 'VOICE_CANCEL' }
   | { type: 'VOICE_CLEAR' }
   | { type: 'OUTPUT_LINE'; line: string }

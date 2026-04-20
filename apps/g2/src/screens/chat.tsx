@@ -5,9 +5,11 @@ import { IcChevronBack } from 'even-toolkit/web/icons/svg-icons';
 import { useSessionStream } from '../hooks/use-session-stream';
 import { useSessions } from '../hooks/use-sessions';
 import { useModels } from '../hooks/use-models';
-import { useSettings } from '../hooks/use-settings';
+import { normalizeSettings, useSettings } from '../hooks/use-settings';
 import { usePrompts } from '../hooks/use-prompts';
 import { useSendPrompt, useCancelSession, useRespondToPermission } from '../hooks/use-send-prompt';
+import { useVoice } from '../contexts/voice';
+import { finishVoiceCapture, startVoiceCapture, stopVoiceCapture } from '../input/voice';
 import { useTranslation } from '../hooks/useTranslation';
 import { StatusDot } from '../components/shared/status-dot';
 import { ChatBubble } from '../components/chat/chat-bubble';
@@ -18,6 +20,8 @@ import { ToolUseCard } from '../components/chat/tool-use-card';
 import { PermissionApprovalCard } from '../components/chat/permission-approval-card';
 import { IcEditSettings, IcFeatInterfaceSettings } from 'even-toolkit/web/icons/svg-icons';
 import type { ChatMessage, PendingPermissionRequest, PermissionDecision } from '../types';
+import type { Action } from '../state/actions';
+import type { Store } from '../state/store';
 
 /* ── Thinking label (cycles verbs like Claude Code) ── */
 
@@ -238,6 +242,8 @@ export function ChatRoute() {
     messages.length > 1 && lastContent.trim().endsWith('?');
 
   const [input, setInput] = useState('');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [showPromptPicker, setShowPromptPicker] = useState(false);
   const [selectedMode, setSelectedMode] = useState('auto');
   const [selectedModel, setSelectedModel] = useState(session?.model ?? '');
@@ -246,8 +252,86 @@ export function ChatRoute() {
     requestId: string;
     decision: PermissionDecision;
   } | null>(null);
+  const ownsVoiceCaptureRef = useRef(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const {
+    listening: isVoiceListening,
+    setListening: setVoiceListening,
+    setText: setVoiceText,
+  } = useVoice();
+  const voiceSettingsRef = useRef(normalizeSettings(settings));
+
+  useEffect(() => {
+    voiceSettingsRef.current = normalizeSettings(settings);
+  }, [settings]);
+
+  const dispatchVoiceAction = useCallback((action: Action) => {
+    switch (action.type) {
+      case 'VOICE_START':
+        ownsVoiceCaptureRef.current = true;
+        setVoiceError(null);
+        setVoiceStatus('Listening...');
+        setVoiceListening(true);
+        setVoiceText(null);
+        break;
+      case 'VOICE_INTERIM':
+        setVoiceError(null);
+        setVoiceStatus('Listening...');
+        setVoiceListening(true);
+        setVoiceText(action.text);
+        setInput(action.text);
+        break;
+      case 'VOICE_FINAL':
+        ownsVoiceCaptureRef.current = false;
+        setVoiceError(null);
+        setVoiceStatus(null);
+        setVoiceListening(false);
+        setVoiceText(action.text);
+        setInput(action.text);
+        break;
+      case 'VOICE_ERROR':
+        ownsVoiceCaptureRef.current = false;
+        setVoiceListening(false);
+        setVoiceText(null);
+        setVoiceStatus(null);
+        setVoiceError(action.error);
+        break;
+      case 'VOICE_STATUS':
+        setVoiceStatus(action.detail ?? (
+          action.status === 'loading' ? 'Starting microphone...'
+          : action.status === 'listening' ? 'Listening...'
+          : action.status === 'processing' ? 'Processing speech...'
+          : null
+        ));
+        setVoiceListening(action.status === 'loading' || action.status === 'listening');
+        if (action.status === 'idle' || action.status === 'error') {
+          ownsVoiceCaptureRef.current = false;
+        }
+        break;
+      case 'VOICE_CANCEL':
+      case 'VOICE_CLEAR':
+        ownsVoiceCaptureRef.current = false;
+        setVoiceListening(false);
+        setVoiceText(null);
+        setVoiceStatus(null);
+        setVoiceError(null);
+        break;
+      default:
+        break;
+    }
+  }, [setVoiceListening, setVoiceText]);
+
+  const voiceStoreRef = useRef<Store>({
+    getState: () => ({ settings: voiceSettingsRef.current } as any),
+    dispatch: dispatchVoiceAction,
+    subscribe: () => () => {},
+  });
+  voiceStoreRef.current = {
+    getState: () => ({ settings: voiceSettingsRef.current } as any),
+    dispatch: dispatchVoiceAction,
+    subscribe: () => () => {},
+  };
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = messagesRef.current;
@@ -320,6 +404,36 @@ export function ChatRoute() {
       setPendingUserMsg(null);
     }
   }, [messages, pendingUserMsg]);
+
+  useEffect(() => () => {
+    if (!ownsVoiceCaptureRef.current) return;
+    ownsVoiceCaptureRef.current = false;
+    stopVoiceCapture();
+    setVoiceListening(false);
+    setVoiceText(null);
+  }, [setVoiceListening, setVoiceText]);
+
+  const handleVoiceStart = useCallback(() => {
+    if (isRunning) return;
+    ownsVoiceCaptureRef.current = true;
+    setVoiceError(null);
+    setVoiceStatus(null);
+    setInput('');
+    setVoiceText(null);
+    void startVoiceCapture(voiceStoreRef.current);
+  }, [isRunning, setVoiceText]);
+
+  const handleVoiceStop = useCallback(() => {
+    finishVoiceCapture();
+  }, []);
+
+  const handleInputChange = useCallback((nextValue: string) => {
+    setInput(nextValue);
+    if (nextValue.trim() || isVoiceListening) return;
+    setVoiceText(null);
+    setVoiceStatus(null);
+    setVoiceError(null);
+  }, [isVoiceListening, setVoiceText]);
 
   const doSend = useCallback(() => {
     const text = input.trim();
@@ -599,15 +713,25 @@ export function ChatRoute() {
         <div className="px-3 pt-2 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
           <ChatInput
             value={input}
-            onChange={setInput}
+            onChange={handleInputChange}
             onSend={doSend}
-            onVoiceStart={() => {}}
-            onVoiceStop={isRunning ? handleCancel : undefined}
-            isListening={false}
+            onVoiceStart={handleVoiceStart}
+            onVoiceStop={isRunning ? handleCancel : handleVoiceStop}
+            isListening={isVoiceListening}
             isRunning={isRunning}
             disabled={isAwaitingApproval}
             placeholder={isAwaitingApproval ? t('web.resolvePermissionToContinue') : (t('web.sendMessage') ?? 'Type a message...')}
           />
+          {voiceError && (
+            <div className="mt-2 text-[12px] tracking-[-0.12px] text-negative">
+              {voiceError}
+            </div>
+          )}
+          {!voiceError && voiceStatus && (
+            <div className="mt-2 text-[12px] tracking-[-0.12px] text-text-dim">
+              {voiceStatus}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -756,6 +756,13 @@ const LANG_LABELS: Record<string, string> = {
   'de-DE': 'DE', 'pt-BR': 'PT', 'zh-CN': 'ZH', 'ja-JP': 'JA',
 };
 
+const STT_PROVIDER_LABELS: Record<string, string> = {
+  soniox: 'Soniox',
+  'whisper-api': 'Whisper',
+  deepgram: 'Deepgram',
+  elevenlabs: 'ElevenLabs',
+};
+
 function settingsData(state: AppState): DisplayData {
   const lang = state.settings.language;
   const hi = state.highlightedIndex;
@@ -764,6 +771,7 @@ function settingsData(state: AppState): DisplayData {
   const items = [
     `${t('settings.language', lang)}: ${getLanguageName(s.language)}`,
     `${t('settings.voice', lang)}: ${LANG_LABELS[s.voiceLang] ?? s.voiceLang}`,
+    `STT: ${STT_PROVIDER_LABELS[s.sttProvider] ?? s.sttProvider}`,
     `${t('settings.toolDetails', lang)}: ${s.showToolDetails ? t('settings.on', lang) : t('settings.off', lang)}`,
     `${t('settings.poll', lang)}: ${s.pollInterval / 1000}s`,
     `${t('settings.hiddenFiles', lang)}: ${s.showHiddenFiles ? t('settings.show', lang) : t('settings.hide', lang)}`,

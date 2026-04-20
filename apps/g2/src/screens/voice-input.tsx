@@ -15,7 +15,7 @@ export function VoiceInputRoute() {
   const { data: sessions } = useSessions();
   const sendPrompt = useSendPrompt(sessions);
   const { t } = useTranslation();
-  const { listening, text } = useVoice();
+  const { listening, text, status } = useVoice();
 
   const session = useMemo(
     () => sessions?.find((s) => s.id === sessionId),
@@ -32,6 +32,7 @@ export function VoiceInputRoute() {
       .filter((s) => s.status !== 'failed')
       .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))[0];
   }, [session, sessions]);
+  const hasError = text?.startsWith('Error:') ?? false;
 
   useDrawerHeader({ title: t('web.input') ?? 'Input' });
 
@@ -60,7 +61,13 @@ export function VoiceInputRoute() {
             <span className="text-[24px]">🎤</span>
           </div>
           <div className="text-[13px] tracking-[-0.13px] text-text-dim">
-            {listening ? (t('web.listening') ?? 'Listening…') : (text ? (t('web.ready') ?? 'Ready to send') : (t('web.notListening') ?? 'Not listening'))}
+            {listening
+              ? (t('web.listening') ?? 'Listening…')
+              : status === 'processing'
+                ? 'Processing...'
+                : hasError
+                  ? 'Error'
+                  : (text ? (t('web.ready') ?? 'Ready to send') : (t('web.notListening') ?? 'Not listening'))}
           </div>
           {text && (
             <div className="text-[15px] tracking-[-0.15px] text-text text-center whitespace-pre-wrap break-words max-w-full">

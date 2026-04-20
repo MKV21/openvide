@@ -8,6 +8,7 @@ import { useSettings, useUpdateSetting } from '../hooks/use-settings';
 import { useTranslation } from '../hooks/useTranslation';
 import { isScheduledSession, isTeamSession } from '../lib/session-filters';
 import { APP_VERSION } from '../lib/app-meta';
+import type { WebSettings } from '../types';
 import { StatusDot } from '../components/shared/status-dot';
 import { Card, Select, Toggle, Input, Button, ConfirmDialog, useDrawerHeader } from 'even-toolkit/web';
 import { IcEditTrash } from 'even-toolkit/web/icons/svg-icons';
@@ -22,6 +23,40 @@ const POLL_OPTIONS = [
   { value: '5000', label: '5s' },
   { value: '10000', label: '10s' },
 ];
+
+const STT_PROVIDER_OPTIONS: Array<{ value: WebSettings['sttProvider']; label: string }> = [
+  { value: 'soniox', label: 'Soniox' },
+  { value: 'whisper-api', label: 'Whisper API' },
+  { value: 'deepgram', label: 'Deepgram' },
+  { value: 'elevenlabs', label: 'ElevenLabs' },
+];
+
+const STT_API_KEY_FIELDS: Record<WebSettings['sttProvider'], keyof WebSettings> = {
+  soniox: 'sttApiKeySoniox',
+  'whisper-api': 'sttApiKeyWhisper',
+  deepgram: 'sttApiKeyDeepgram',
+  elevenlabs: 'sttApiKeyElevenLabs',
+};
+
+const STT_API_KEY_LABELS: Record<WebSettings['sttProvider'], string> = {
+  soniox: 'Soniox API Key',
+  'whisper-api': 'OpenAI API Key',
+  deepgram: 'Deepgram API Key',
+  elevenlabs: 'ElevenLabs API Key',
+};
+
+const STT_API_KEY_PLACEHOLDERS: Record<WebSettings['sttProvider'], string> = {
+  soniox: 'Enter Soniox API key',
+  'whisper-api': 'Enter OpenAI API key',
+  deepgram: 'Enter Deepgram API key',
+  elevenlabs: 'Enter ElevenLabs API key',
+};
+
+function getSttApiKey(settings: WebSettings | undefined, provider: WebSettings['sttProvider']): string {
+  const keyField = STT_API_KEY_FIELDS[provider];
+  const value = settings?.[keyField];
+  return typeof value === 'string' ? value : '';
+}
 
 function SettingRow({ label, description, children }: { label: string; description?: string; children: React.ReactNode }) {
   return (
@@ -180,42 +215,29 @@ export function SettingsRoute() {
           <SettingRow label="STT Engine" description="Speech-to-text provider for voice input">
             <Select
               value={settings?.sttProvider ?? 'soniox'}
-              options={[
-                { value: 'soniox', label: 'Soniox' },
-                { value: 'whisper-api', label: 'Whisper API' },
-                { value: 'deepgram', label: 'Deepgram' },
-              ]}
+              options={STT_PROVIDER_OPTIONS}
               onValueChange={(v) => {
-                updateSetting.mutate({ key: 'sttProvider', value: v });
-                const keyMap: Record<string, string> = {
-                  soniox: settings?.sttApiKeySoniox ?? '',
-                  'whisper-api': settings?.sttApiKeyWhisper ?? '',
-                  deepgram: settings?.sttApiKeyDeepgram ?? '',
-                };
-                updateSetting.mutate({ key: 'sttApiKey', value: keyMap[v] ?? '' });
+                const provider = v as WebSettings['sttProvider'];
+                updateSetting.mutate({ key: 'sttProvider', value: provider });
+                updateSetting.mutate({ key: 'sttApiKey', value: getSttApiKey(settings, provider) });
               }}
               className="w-[130px]"
             />
           </SettingRow>
           <div className="py-3">
             <span className="text-[11px] tracking-[-0.11px] text-text-dim font-normal">
-              {settings?.sttProvider === 'whisper-api' ? 'OpenAI API Key' : settings?.sttProvider === 'deepgram' ? 'Deepgram API Key' : 'Soniox API Key'}
+              {STT_API_KEY_LABELS[settings?.sttProvider ?? 'soniox']}
             </span>
             <Input
               type="password"
-              value={settings?.sttProvider === 'whisper-api' ? (settings?.sttApiKeyWhisper ?? '') : settings?.sttProvider === 'deepgram' ? (settings?.sttApiKeyDeepgram ?? '') : (settings?.sttApiKeySoniox ?? '')}
+              value={getSttApiKey(settings, settings?.sttProvider ?? 'soniox')}
               onChange={(e) => {
                 const v = e.target.value;
-                const providerKeyMap: Record<string, keyof import('../types').WebSettings> = {
-                  soniox: 'sttApiKeySoniox',
-                  'whisper-api': 'sttApiKeyWhisper',
-                  deepgram: 'sttApiKeyDeepgram',
-                };
-                const key = providerKeyMap[settings?.sttProvider ?? 'soniox'] ?? 'sttApiKeySoniox';
+                const key = STT_API_KEY_FIELDS[settings?.sttProvider ?? 'soniox'];
                 updateSetting.mutate({ key, value: v });
                 updateSetting.mutate({ key: 'sttApiKey', value: v });
               }}
-              placeholder={`Enter ${settings?.sttProvider === 'whisper-api' ? 'OpenAI' : settings?.sttProvider === 'deepgram' ? 'Deepgram' : 'Soniox'} API key`}
+              placeholder={STT_API_KEY_PLACEHOLDERS[settings?.sttProvider ?? 'soniox']}
               className="mt-1"
             />
           </div>

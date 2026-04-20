@@ -14,6 +14,19 @@ const VOICE_LANGUAGE_LABELS = Object.fromEntries(
   VOICE_LANGUAGE_OPTIONS.map((entry) => [entry.value, entry.label]),
 );
 const POLL_VALUES = [1000, 2500, 5000, 10000];
+const STT_PROVIDERS = ['soniox', 'whisper-api', 'deepgram', 'elevenlabs'] as const;
+const STT_PROVIDER_LABELS: Record<(typeof STT_PROVIDERS)[number], string> = {
+  soniox: 'Soniox',
+  'whisper-api': 'Whisper',
+  deepgram: 'Deepgram',
+  elevenlabs: 'ElevenLabs',
+};
+const STT_PROVIDER_KEY_FIELDS: Record<(typeof STT_PROVIDERS)[number], string> = {
+  soniox: 'sttApiKeySoniox',
+  'whisper-api': 'sttApiKeyWhisper',
+  deepgram: 'sttApiKeyDeepgram',
+  elevenlabs: 'sttApiKeyElevenLabs',
+};
 const EDIT_MODE_BASE = 100;
 
 type SettingsItem = { label: string; value: string; key: string; editable?: boolean };
@@ -25,6 +38,7 @@ function getSettingsItems(snap: OpenVideSnapshot): SettingsItem[] {
     { label: t('settings.language', lang), value: getLanguageName(lang), key: 'language', editable: true },
     { label: t('settings.voice', lang), value: VOICE_LANGUAGE_LABELS[s.voiceLang] ?? s.voiceLang, key: 'voiceLang', editable: true },
     { label: t('settings.codexPermissions', lang), value: s.codexPermissionMode === 'ask' ? t('settings.ask', lang) : t('settings.auto', lang), key: 'codexPermissionMode', editable: true },
+    { label: 'STT', value: STT_PROVIDER_LABELS[s.sttProvider] ?? s.sttProvider, key: 'sttProvider', editable: true },
     { label: t('settings.toolDetails', lang), value: s.showToolDetails ? t('settings.on', lang) : t('settings.off', lang), key: 'showToolDetails', editable: true },
     { label: t('settings.poll', lang), value: `${s.pollInterval / 1000}s`, key: 'pollInterval', editable: true },
     { label: t('settings.hiddenFiles', lang), value: s.showHiddenFiles ? t('settings.show', lang) : t('settings.hide', lang), key: 'showHiddenFiles', editable: true },
@@ -72,6 +86,15 @@ function cycleSettingValue(settings: any, key: string, direction: 'up' | 'down')
     case 'codexPermissionMode':
       s.codexPermissionMode = s.codexPermissionMode === 'ask' ? 'auto' : 'ask';
       break;
+    case 'sttProvider': {
+      const idx = STT_PROVIDERS.indexOf(s.sttProvider);
+      const next = ((idx >= 0 ? idx : 0) + delta + STT_PROVIDERS.length) % STT_PROVIDERS.length;
+      const provider = STT_PROVIDERS[next];
+      s.sttProvider = provider;
+      const keyField = STT_PROVIDER_KEY_FIELDS[provider];
+      s.sttApiKey = typeof s[keyField] === 'string' ? s[keyField] : '';
+      break;
+    }
     case 'pollInterval': {
       const idx = POLL_VALUES.indexOf(s.pollInterval);
       const next = ((idx >= 0 ? idx : 0) + delta + POLL_VALUES.length) % POLL_VALUES.length;

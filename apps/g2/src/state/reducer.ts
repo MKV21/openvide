@@ -14,10 +14,21 @@ const defaultSettings: Settings = {
   codexPermissionMode: 'auto',
   sttProvider: 'soniox',
   sttApiKey: '',
+  sttApiKeySoniox: '',
+  sttApiKeyWhisper: '',
+  sttApiKeyDeepgram: '',
+  sttApiKeyElevenLabs: '',
 };
 
 // Voice language cycle options
 const VOICE_LANGS = ['en-US', 'it-IT', 'es-ES', 'fr-FR', 'de-DE', 'pt-BR', 'zh-CN', 'ja-JP'];
+const STT_PROVIDERS: Settings['sttProvider'][] = ['soniox', 'whisper-api', 'deepgram', 'elevenlabs'];
+const STT_PROVIDER_KEY_FIELDS: Record<Settings['sttProvider'], keyof Settings> = {
+  soniox: 'sttApiKeySoniox',
+  'whisper-api': 'sttApiKeyWhisper',
+  deepgram: 'sttApiKeyDeepgram',
+  elevenlabs: 'sttApiKeyElevenLabs',
+};
 // Poll interval cycle options (ms)
 const POLL_INTERVALS = [1000, 2500, 5000, 10000];
 
@@ -36,6 +47,7 @@ export const initialState: AppState = {
   connectionStatus: 'connecting',
   voiceText: null,
   voiceListening: false,
+  voiceStatus: null,
   outputLines: [],
   outputScrollOffset: 0,
   chatHighlight: 0,
@@ -209,7 +221,7 @@ export function reduce(state: AppState, action: Action): AppState {
       } else if (state.screen === 'session-diffs') {
         max = state.diffFiles.length - 1;
       } else if (state.screen === 'settings') {
-        max = 4; // 5 settings items (0-4)
+        max = 5; // 6 settings items (0-5)
       } else if (state.screen === 'prompt-select') {
         max = state.prompts.length; // +1 for "Voice Input" at top
       } else if (state.screen === 'port-browser') {
@@ -463,22 +475,29 @@ export function reduce(state: AppState, action: Action): AppState {
 
     // Voice
     case 'VOICE_START':
-      return { ...state, voiceListening: true, voiceText: null };
+      return { ...state, voiceListening: true, voiceText: null, voiceStatus: 'listening' };
 
     case 'VOICE_INTERIM':
       return { ...state, voiceText: action.text };
 
     case 'VOICE_FINAL':
-      return { ...state, voiceText: action.text, voiceListening: false };
+      return { ...state, voiceText: action.text, voiceListening: false, voiceStatus: 'idle' };
 
     case 'VOICE_ERROR':
-      return { ...state, voiceListening: false, voiceText: `Error: ${action.error}` };
+      return { ...state, voiceListening: false, voiceText: `Error: ${action.error}`, voiceStatus: 'error' };
+
+    case 'VOICE_STATUS':
+      return {
+        ...state,
+        voiceListening: action.status === 'loading' || action.status === 'listening',
+        voiceStatus: action.status,
+      };
 
     case 'VOICE_CANCEL':
-      return { ...state, screen: 'session-detail', voiceListening: false, voiceText: null, highlightedIndex: 0 };
+      return { ...state, screen: 'session-detail', voiceListening: false, voiceText: null, voiceStatus: null, highlightedIndex: 0 };
 
     case 'VOICE_CLEAR':
-      return { ...state, voiceListening: false, voiceText: null };
+      return { ...state, voiceListening: false, voiceText: null, voiceStatus: null };
 
     // Live output
     case 'OUTPUT_LINE': {
@@ -588,6 +607,13 @@ export function reduce(state: AppState, action: Action): AppState {
         case 'showToolDetails':
           s.showToolDetails = !s.showToolDetails;
           break;
+        case 'sttProvider': {
+          const idx = STT_PROVIDERS.indexOf(s.sttProvider);
+          s.sttProvider = STT_PROVIDERS[(idx + 1) % STT_PROVIDERS.length];
+          const keyField = STT_PROVIDER_KEY_FIELDS[s.sttProvider];
+          s.sttApiKey = typeof s[keyField] === 'string' ? s[keyField] : '';
+          break;
+        }
         case 'pollInterval': {
           const pi = POLL_INTERVALS.indexOf(s.pollInterval);
           s.pollInterval = POLL_INTERVALS[(pi + 1) % POLL_INTERVALS.length];
@@ -643,9 +669,10 @@ function settingsKeyAtIndex(index: number): keyof Settings {
   switch (index) {
     case 0: return 'language';
     case 1: return 'voiceLang';
-    case 2: return 'showToolDetails';
-    case 3: return 'pollInterval';
-    case 4: return 'showHiddenFiles';
+    case 2: return 'sttProvider';
+    case 3: return 'showToolDetails';
+    case 4: return 'pollInterval';
+    case 5: return 'showHiddenFiles';
     default: return 'language';
   }
 }

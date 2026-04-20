@@ -27,9 +27,10 @@ export const defaultSettings: WebSettings = {
   sttApiKeySoniox: '',
   sttApiKeyWhisper: '',
   sttApiKeyDeepgram: '',
+  sttApiKeyElevenLabs: '',
 };
 
-const VALID_STT_PROVIDERS: WebSettings['sttProvider'][] = ['soniox', 'whisper-api', 'deepgram'];
+const VALID_STT_PROVIDERS: WebSettings['sttProvider'][] = ['soniox', 'whisper-api', 'deepgram', 'elevenlabs'];
 const VALID_CODEX_PERMISSION_MODES: WebSettings['codexPermissionMode'][] = ['auto', 'ask'];
 
 function normalizeSttProvider(provider?: string | null): WebSettings['sttProvider'] {

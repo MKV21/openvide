@@ -87,8 +87,12 @@ export interface Settings {
   pollInterval: number;      // ms, default 2500
   showHiddenFiles: boolean;  // default false
   codexPermissionMode: 'auto' | 'ask';
-  sttProvider: 'soniox';
+  sttProvider: 'soniox' | 'whisper-api' | 'deepgram' | 'elevenlabs';
   sttApiKey: string;
+  sttApiKeySoniox: string;
+  sttApiKeyWhisper: string;
+  sttApiKeyDeepgram: string;
+  sttApiKeyElevenLabs: string;
 }
 
 // ── Prompt Types (Phase 6) ──
@@ -210,6 +214,7 @@ export interface AppState {
   // Voice input
   voiceText: string | null;
   voiceListening: boolean;
+  voiceStatus: 'loading' | 'listening' | 'processing' | 'idle' | 'error' | null;
   // Live output / chat
   outputLines: string[];
   outputScrollOffset: number;

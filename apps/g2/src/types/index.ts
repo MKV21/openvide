@@ -109,11 +109,12 @@ export interface WebSettings {
   pollInterval: number;
   showHiddenFiles: boolean;
   codexPermissionMode: 'auto' | 'ask';
-  sttProvider: 'soniox' | 'whisper-api' | 'deepgram';
+  sttProvider: 'soniox' | 'whisper-api' | 'deepgram' | 'elevenlabs';
   sttApiKey: string;
   sttApiKeySoniox: string;
   sttApiKeyWhisper: string;
   sttApiKeyDeepgram: string;
+  sttApiKeyElevenLabs: string;
 }
 
 export interface WebBridgeConfig {
