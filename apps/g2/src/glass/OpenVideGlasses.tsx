@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { useGlasses } from 'even-toolkit/useGlasses';
 import { createScreenMapper } from 'even-toolkit/glass-router';
 import { toDisplayData, onGlassAction } from './selectors';
 import type { OpenVideSnapshot, OpenVideActions } from './types';
@@ -27,6 +26,7 @@ import {
   clearStoredSettings,
   writeStoredSettings,
 } from '../lib/settings-storage';
+import { useReactiveGlasses } from './use-reactive-glasses';
 
 const VOICE_ROUTE = '/voice-input';
 const NATIVE_SYNC_POLL_MS = 4000;
@@ -1035,13 +1035,14 @@ export function OpenVideGlasses() {
     [],
   );
 
-  useGlasses({
+  useReactiveGlasses({
     getSnapshot,
     toDisplayData,
     onGlassAction: handleAction,
     deriveScreen,
     appName: 'OPENVIDE',
     getPageMode: (screen) => (screen === 'home' ? 'home' : 'text'),
+    refreshKey: snapshot,
   });
 
   return null;
