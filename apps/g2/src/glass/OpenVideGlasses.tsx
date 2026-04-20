@@ -31,6 +31,10 @@ import {
 const VOICE_ROUTE = '/voice-input';
 const NATIVE_SYNC_POLL_MS = 4000;
 
+function encodePromptLine(text: string): string {
+  return `§P§${text}`;
+}
+
 function isPermissionDecision(value: unknown): value is PermissionDecision {
   return value === 'approve_once' || value === 'reject' || value === 'abort_run';
 }
@@ -99,6 +103,7 @@ function useGlassOutputStream(
   const loadedNativeHistoryKeyRef = useRef<string | null>(null);
   const nativeHistoryLineCountRef = useRef(0);
   const subscribedTargetRef = useRef<string | null>(null);
+  const streamIncludesNativeHistoryRef = useRef(false);
   const session = sessions?.find((entry) => entry.id === sessionId) ?? null;
   const sessionsLoaded = sessions != null;
   const bridgeSubscriptionKey = useMemo(
@@ -111,6 +116,14 @@ function useGlassOutputStream(
     ].join(':')).join('|'),
     [hosts],
   );
+  const buildOutputLines = useCallback(() => {
+    if (streamIncludesNativeHistoryRef.current) {
+      return streamLinesRef.current.length >= nativeLinesRef.current.length
+        ? [...streamLinesRef.current]
+        : [...nativeLinesRef.current];
+    }
+    return [...nativeLinesRef.current, ...streamLinesRef.current];
+  }, []);
 
   // Ensure bridge points at the right host before subscribing
   useEffect(() => {
@@ -126,12 +139,21 @@ function useGlassOutputStream(
       seenRef.current = new Set();
       loadedNativeHistoryKeyRef.current = null;
       nativeHistoryLineCountRef.current = 0;
+      streamIncludesNativeHistoryRef.current = false;
       return;
     }
     if (sessionsLoaded && !session) return;
 
-    if (subscribedTargetRef.current !== sessionId) {
-      subscribedTargetRef.current = sessionId;
+    const nativeSub = session?.origin === 'native'
+      && session.resumeId
+      && (session.tool === 'claude' || session.tool === 'codex' || session.tool === 'gemini')
+      ? `${session.tool}:${session.resumeId}`
+      : null;
+    const target = nativeSub ?? sessionId;
+    streamIncludesNativeHistoryRef.current = nativeSub != null;
+
+    if (subscribedTargetRef.current !== target) {
+      subscribedTargetRef.current = target;
       streamLinesRef.current = [];
       nativeLinesRef.current = [];
       seenRef.current = new Set();
@@ -140,7 +162,7 @@ function useGlassOutputStream(
       setOutputLines([]);
     }
 
-    const unsub = subscribe(sessionId, (rawLine: string) => {
+    const unsub = subscribe(target, (rawLine: string) => {
       if (seenRef.current.has(rawLine)) return;
       seenRef.current.add(rawLine);
 
@@ -150,7 +172,7 @@ function useGlassOutputStream(
         // Debounce state update
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => {
-          setOutputLines([...nativeLinesRef.current, ...streamLinesRef.current]);
+          setOutputLines(buildOutputLines());
         }, 150);
       }
     });
@@ -159,7 +181,7 @@ function useGlassOutputStream(
       unsub();
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [activeHostId, bridgeSubscriptionKey, connectionStatus, session?.hostId, session?.id, sessionId, sessionsLoaded]);
+  }, [activeHostId, bridgeSubscriptionKey, buildOutputLines, connectionStatus, session?.hostId, session?.id, session?.origin, session?.resumeId, session?.tool, sessionId, sessionsLoaded]);
 
   useEffect(() => {
     if (!sessionId || !session?.resumeId) return;
@@ -198,7 +220,7 @@ function useGlassOutputStream(
           (res.history as any).lines as string[],
         );
         nativeLinesRef.current = parsedLines;
-        setOutputLines([...parsedLines, ...streamLinesRef.current]);
+        setOutputLines(buildOutputLines());
       } catch {
         // Keep the current output visible if native history bootstrap fails.
       }
@@ -207,7 +229,7 @@ function useGlassOutputStream(
     return () => {
       cancelled = true;
     };
-  }, [activeHostId, hosts, session?.hostId, session?.id, session?.origin, session?.outputLines, session?.resumeId, session?.tool, session?.workingDirectory, sessionId]);
+  }, [activeHostId, buildOutputLines, hosts, session?.hostId, session?.id, session?.origin, session?.outputLines, session?.resumeId, session?.tool, session?.workingDirectory, sessionId]);
 
   useEffect(() => {
     if (!sessionId || !session?.resumeId) return;
@@ -245,7 +267,7 @@ function useGlassOutputStream(
           (res.history as any).lines as string[],
         );
         nativeLinesRef.current = parsedLines;
-        setOutputLines([...parsedLines, ...streamLinesRef.current]);
+        setOutputLines(buildOutputLines());
       } catch {
         // Keep the current output visible if native history polling fails.
       }
@@ -272,6 +294,7 @@ function useGlassOutputStream(
     session?.tool,
     session?.workingDirectory,
     sessionId,
+    buildOutputLines,
   ]);
 
   return outputLines;
@@ -430,9 +453,19 @@ export function OpenVideGlasses() {
   const [permissionStatusOverrides, setPermissionStatusOverrides] = useState<Record<string, PermissionStatusOverride>>({});
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceText, setVoiceText] = useState<string | null>(null);
+  const [voiceStatus, setVoiceStatus] = useState<'loading' | 'listening' | 'processing' | 'idle' | 'error' | null>(null);
+  const [pendingPrompt, setPendingPrompt] = useState<{ sessionId: string; text: string; afterLineCount: number } | null>(null);
   const voice = useVoice();
-  useEffect(() => { voice.setListening(voiceListening); }, [voiceListening, voice]);
-  useEffect(() => { voice.setText(voiceText); }, [voiceText, voice]);
+  const glassVoiceActiveRef = useRef(false);
+  useEffect(() => {
+    if (glassVoiceActiveRef.current) voice.setListening(voiceListening);
+  }, [voiceListening, voice]);
+  useEffect(() => {
+    if (glassVoiceActiveRef.current) voice.setText(voiceText);
+  }, [voiceText, voice]);
+  useEffect(() => {
+    if (glassVoiceActiveRef.current) voice.setStatus(voiceStatus);
+  }, [voiceStatus, voice]);
   const voiceReturnPathRef = useRef('/sessions');
   const settingsRef = useRef(glassSettings);
   settingsRef.current = glassSettings;
@@ -442,23 +475,40 @@ export function OpenVideGlasses() {
       case 'VOICE_START':
         setVoiceListening(true);
         setVoiceText(null);
+        setVoiceStatus('listening');
         break;
       case 'VOICE_INTERIM':
         setVoiceListening(true);
         setVoiceText(action.text);
+        setVoiceStatus('listening');
         break;
       case 'VOICE_FINAL':
         setVoiceListening(false);
         setVoiceText(action.text);
+        setVoiceStatus('idle');
         break;
       case 'VOICE_ERROR':
         setVoiceListening(false);
         setVoiceText(`Error: ${action.error}`);
+        setVoiceStatus('error');
+        break;
+      case 'VOICE_STATUS':
+        setVoiceStatus(action.status);
+        if (action.status === 'loading' || action.status === 'listening') {
+          setVoiceListening(true);
+          setVoiceText(null);
+        } else if (action.status === 'processing') {
+          setVoiceListening(false);
+          setVoiceText(null);
+        } else if (action.status === 'idle' || action.status === 'error') {
+          setVoiceListening(false);
+        }
         break;
       case 'VOICE_CANCEL':
       case 'VOICE_CLEAR':
         setVoiceListening(false);
         setVoiceText(null);
+        setVoiceStatus(null);
         break;
       default:
         break;
@@ -600,6 +650,31 @@ export function OpenVideGlasses() {
   const browserHostId = urlParams.browserHost ?? activeHostId ?? null;
   const { data: browserEntries } = useBrowserEntries(isFilesScreen && !isViewingFile ? urlParams.browserPath : '~', browserHostId);
   const { data: fileContent } = useFileContent(isViewingFile ? urlParams.browserPath : null, browserHostId);
+  const displayOutputLines = useMemo(() => {
+    const lines = isViewingFile && fileContent ? fileContent.split('\n') : outputLines;
+    if (isViewingFile || !pendingPrompt || pendingPrompt.sessionId !== urlParams.sessionId) return lines;
+    const promptLine = encodePromptLine(pendingPrompt.text);
+    if (lines.includes(promptLine)) return lines;
+    const insertAt = Math.max(0, Math.min(pendingPrompt.afterLineCount, lines.length));
+    return [
+      ...lines.slice(0, insertAt),
+      promptLine,
+      ...lines.slice(insertAt),
+    ];
+  }, [fileContent, isViewingFile, outputLines, pendingPrompt, urlParams.sessionId]);
+
+  useEffect(() => {
+    if (!pendingPrompt || pendingPrompt.sessionId !== urlParams.sessionId) return;
+    const promptLine = encodePromptLine(pendingPrompt.text);
+    const promptIndex = outputLines.lastIndexOf(promptLine);
+    if (promptIndex < 0) return;
+    const hasResponseAfterPrompt = outputLines
+      .slice(promptIndex + 1)
+      .some((text) => text.trim() && !text.startsWith('§P§'));
+    if (hasResponseAfterPrompt) {
+      setPendingPrompt(null);
+    }
+  }, [outputLines, pendingPrompt, urlParams.sessionId]);
 
   // Build snapshot from shared data
   const snapshot: OpenVideSnapshot = useMemo(() => ({
@@ -613,14 +688,16 @@ export function OpenVideGlasses() {
     selectedSessionMode,
     selectedSessionModel,
     selectedSessionReadNavIndex,
+    pendingPrompt,
     selectedWorkspace: urlParams.workspace ?? null,
     selectedWorkspaceHostId: urlParams.workspaceHost ?? null,
-    outputLines: isViewingFile && fileContent ? fileContent.split('\n') : outputLines,
+    outputLines: displayOutputLines,
     outputScrollOffset: 0,
     chatHighlight: 0,
     expandedThinking: [],
     voiceListening,
     voiceText,
+    voiceStatus,
     teams: teams as unknown as OpenVideSnapshot['teams'],
     selectedTeamId: activeTeamId,
     teamTasks: teamTasks as unknown as OpenVideSnapshot['teamTasks'],
@@ -635,7 +712,7 @@ export function OpenVideGlasses() {
     suggestedPrompts,
     ports: [],
     pendingResult: null,
-  }), [sessionsForGlass, hosts, browserHostId, activeHostId, hostStatuses, workspaces, connectionStatus, urlParams, outputLines, voiceListening, voiceText, glassSettings, teams, teamTasks, teamMessages, teamPlan, scheduledTasks, browserEntries, activeTeamId, isViewingFile, fileContent, prompts, suggestedPrompts, selectedSessionMode, selectedSessionModel, selectedSessionReadNavIndex]);
+  }), [sessionsForGlass, hosts, browserHostId, activeHostId, hostStatuses, workspaces, connectionStatus, urlParams, displayOutputLines, voiceListening, voiceText, voiceStatus, pendingPrompt, glassSettings, teams, teamTasks, teamMessages, teamPlan, scheduledTasks, browserEntries, activeTeamId, prompts, suggestedPrompts, selectedSessionMode, selectedSessionModel, selectedSessionReadNavIndex]);
 
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
@@ -808,23 +885,48 @@ export function OpenVideGlasses() {
     } else {
       voiceReturnPathRef.current = currentPath;
     }
+    glassVoiceActiveRef.current = true;
     setVoiceListening(true);
     setVoiceText(null);
+    setVoiceStatus('listening');
+    voice.setListening(true);
+    voice.setText(null);
+    voice.setStatus('listening');
     navigate(`${VOICE_ROUTE}${location.search}`);
     void (async () => {
       await startVoiceCapture(voiceStoreRef.current);
     })();
-  }, [location.pathname, location.search, navigate]);
+  }, [location.pathname, location.search, navigate, voice]);
 
   const stopVoice = useCallback(() => {
     stopVoiceCapture();
     setVoiceListening(false);
     setVoiceText(null);
+    setVoiceStatus(null);
+    voice.setListening(false);
+    voice.setText(null);
+    voice.setStatus(null);
+    glassVoiceActiveRef.current = false;
     const target = voiceReturnPathRef.current || '/sessions';
     if (`${location.pathname}${location.search}` !== target) {
       navigate(target, { replace: true });
     }
-  }, [location.pathname, location.search, navigate]);
+  }, [location.pathname, location.search, navigate, voice]);
+
+  const previousPathRef = useRef(location.pathname);
+  useEffect(() => {
+    const previousPath = previousPathRef.current;
+    previousPathRef.current = location.pathname;
+    if (previousPath !== VOICE_ROUTE || location.pathname === VOICE_ROUTE || !voiceListening) return;
+    stopVoiceCapture();
+    setVoiceListening(false);
+    setVoiceText(null);
+    setVoiceStatus(null);
+    voice.setListening(false);
+    voice.setText(null);
+    voice.setStatus(null);
+    glassVoiceActiveRef.current = false;
+  }, [location.pathname, voiceListening, voice]);
 
   const submitVoice = useCallback(async (prompt: string) => {
     const text = prompt.trim();
@@ -836,6 +938,11 @@ export function OpenVideGlasses() {
     stopVoiceCapture();
     setVoiceListening(false);
     setVoiceText(null);
+    setVoiceStatus(null);
+    voice.setListening(false);
+    voice.setText(null);
+    voice.setStatus(null);
+    glassVoiceActiveRef.current = false;
 
     const target = voiceReturnPathRef.current || '/sessions';
     const [pathname, search = ''] = target.split('?');
@@ -849,6 +956,7 @@ export function OpenVideGlasses() {
     } else {
       const sessionId = params.get('id') ?? params.get('session') ?? urlParams.sessionId;
       if (sessionId) {
+        setPendingPrompt({ sessionId, text, afterLineCount: outputLines.length });
         await rpcWithSharedState('session.send', { id: sessionId, prompt: text });
       }
     }
@@ -856,7 +964,7 @@ export function OpenVideGlasses() {
     if (`${location.pathname}${location.search}` !== target) {
       navigate(target, { replace: true });
     }
-  }, [location.pathname, location.search, navigate, rpcWithSharedState, stopVoice, urlParams.sessionId]);
+  }, [location.pathname, location.search, navigate, outputLines.length, rpcWithSharedState, stopVoice, urlParams.sessionId, voice]);
 
   const ctxRef = useRef<OpenVideActions>({
     navigate,

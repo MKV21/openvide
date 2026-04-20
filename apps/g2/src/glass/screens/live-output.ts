@@ -527,9 +527,10 @@ export const liveOutputScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = 
     // while `status === 'running'`, but Codex/Gemini often respond in one shot
     // (and external CLI writes keep `status === 'idle'` entirely), so relying
     // only on `status === 'running'` would miss those cases.
+    const hasPendingPrompt = snap.pendingPrompt?.sessionId === snap.selectedSessionId;
     const showProcessing = !!lastBlock
       && lastBlock.kind === 'prompt'
-      && (status === 'running' || status === 'awaiting_approval');
+      && (status === 'running' || status === 'awaiting_approval' || hasPendingPrompt);
     const selectedHostConnected = isEffectiveHostConnected(snap, selectedSession?.hostId);
     const showOfflineWarning = !selectedHostConnected;
     // One row reserved vs. raw grid so the last line isn't clipped by the glass display.

@@ -13,14 +13,19 @@ export const voiceInputScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> = 
     const sessionMeta = resolveGlassSessionMeta(snap);
     const tool = sessionMeta.tool?.toUpperCase() ?? 'AI';
     const actionBar = buildStaticActionBar(ACTIONS, Math.max(0, Math.min(nav.highlightedIndex, ACTIONS.length - 1)));
+    const hasError = snap.voiceText?.startsWith('Error:') ?? false;
     const lines = [
       ...compactHeader(fieldJoin('VOICE', tool), actionBar),
     ];
 
     if (snap.voiceListening) {
       lines.push(line('Listening...', 'meta'));
+    } else if (hasError) {
+      lines.push(line('Error', 'meta'));
+    } else if (snap.voiceStatus === 'processing') {
+      lines.push(line('Processing...', 'meta'));
     } else {
-      lines.push(line(snap.voiceText ? 'Ready to send' : 'Processing...', 'meta'));
+      lines.push(line(snap.voiceText ? 'Ready to send' : 'Not listening', 'meta'));
     }
 
     lines.push(line(''));

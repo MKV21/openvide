@@ -26,6 +26,7 @@ export interface OpenVideSnapshot {
   selectedSessionMode: string;
   selectedSessionModel: string;
   selectedSessionReadNavIndex: number | null;
+  pendingPrompt: { sessionId: string; text: string; afterLineCount: number } | null;
   selectedWorkspace: string | null;
   selectedWorkspaceHostId: string | null;
   outputLines: string[];
@@ -34,6 +35,7 @@ export interface OpenVideSnapshot {
   expandedThinking: number[];
   voiceListening: boolean;
   voiceText: string | null;
+  voiceStatus: 'loading' | 'listening' | 'processing' | 'idle' | 'error' | null;
   teams: TeamSummary[];
   selectedTeamId: string | null;
   teamTasks: TeamTaskSummary[];
