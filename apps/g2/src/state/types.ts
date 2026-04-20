@@ -86,6 +86,7 @@ export interface Settings {
   showToolDetails: boolean;  // default true
   pollInterval: number;      // ms, default 2500
   showHiddenFiles: boolean;  // default false
+  codexPermissionMode: 'auto' | 'ask';
   sttProvider: 'soniox';
   sttApiKey: string;
 }

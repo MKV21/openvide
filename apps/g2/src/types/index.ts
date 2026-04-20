@@ -108,6 +108,7 @@ export interface WebSettings {
   showToolDetails: boolean;
   pollInterval: number;
   showHiddenFiles: boolean;
+  codexPermissionMode: 'auto' | 'ask';
   sttProvider: 'soniox' | 'whisper-api' | 'deepgram';
   sttApiKey: string;
   sttApiKeySoniox: string;

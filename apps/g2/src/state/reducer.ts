@@ -11,6 +11,7 @@ const defaultSettings: Settings = {
   showToolDetails: true,
   pollInterval: 2500,
   showHiddenFiles: false,
+  codexPermissionMode: 'auto',
   sttProvider: 'soniox',
   sttApiKey: '',
 };

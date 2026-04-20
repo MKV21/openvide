@@ -92,14 +92,18 @@ export const sessionListScreen: GlassScreen<OpenVideSnapshot, OpenVideActions> =
         if (selected.origin === 'native' && selected.resumeId) {
           const hostId = selected.hostId ?? snap.selectedWorkspaceHostId ?? snap.selectedHostId ?? snap.hosts[0]?.id;
           void (async () => {
-            const createRes = await ctx.rpc('session.create', {
+            const params: Record<string, unknown> = {
               hostId,
               tool: selected.tool,
               cwd: selected.workingDirectory,
               model: selected.model,
               conversationId: selected.resumeId,
               autoAccept: true,
-            });
+            };
+            if (selected.tool === 'codex' && snap.settings.codexPermissionMode === 'ask') {
+              params.permissionMode = 'ask';
+            }
+            const createRes = await ctx.rpc('session.create', params);
             const sessionId = typeof createRes?.session?.id === 'string' ? createRes.session.id : null;
             if (sessionId) {
               ctx.navigate(`/chat?id=${encodeURIComponent(sessionId)}`);
