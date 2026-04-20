@@ -18,6 +18,18 @@
   <img alt="Platform" src="https://img.shields.io/badge/platform-iOS%20%7C%20Android-black" />
 </p>
 
+## Fork Status
+
+This repository is a fork of [open-vide/openvide](https://github.com/open-vide/openvide).
+
+It carries a tested Codex Ask Mode stack for running the daemon on a remote host while using G2/Web or Even Realities glasses as the approval UI. The changes are proposed upstream and kept open for review:
+
+- [PR #7](https://github.com/open-vide/openvide/pull/7): daemon health identity metadata
+- [PR #8](https://github.com/open-vide/openvide/pull/8): Codex Ask Mode backend support
+- [PR #9](https://github.com/open-vide/openvide/pull/9): G2/Web and glasses approval UI
+
+Until those PRs are merged upstream, this fork's `main` branch is the integration branch for these changes and may temporarily differ from upstream `main`.
+
 ## Overview
 
 This repository is the canonical OpenVide backend and client monorepo:
