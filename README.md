@@ -263,7 +263,7 @@ openvide-daemon bridge revoke --jti <token-jti>
 openvide-daemon bridge qr [--expire 24h] [--host <host>]
 openvide-daemon bridge config \
   --bind-host 127.0.0.1 \
-  --default-cwd /Users/fabiogalimberti/Desktop/git \
+  --default-cwd /path/to/workspace \
   --even-ai-tool codex \
   --even-ai-mode last
 ```
