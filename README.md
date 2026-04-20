@@ -211,6 +211,9 @@ cd apps/g2
 yarn dev
 ```
 
+For local Even Realities G2 / simulator / glasses testing, start with
+[`docs/g2-glasses-development.md`](docs/g2-glasses-development.md).
+
 ## RN App Setup
 
 ### 1. Variant configs
@@ -263,7 +266,7 @@ openvide-daemon bridge revoke --jti <token-jti>
 openvide-daemon bridge qr [--expire 24h] [--host <host>]
 openvide-daemon bridge config \
   --bind-host 127.0.0.1 \
-  --default-cwd /Users/fabiogalimberti/Desktop/git \
+  --default-cwd /path/to/workspace \
   --even-ai-tool codex \
   --even-ai-mode last
 ```

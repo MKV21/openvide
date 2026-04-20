@@ -50,6 +50,10 @@ yarn install
 yarn g2:dev
 ```
 
+For local Even Realities G2 / simulator / glasses testing, read:
+
+- [`../../docs/g2-glasses-development.md`](../../docs/g2-glasses-development.md)
+
 Or from this workspace directly:
 
 ```bash
