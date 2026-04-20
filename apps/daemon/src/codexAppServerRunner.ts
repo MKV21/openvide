@@ -385,7 +385,8 @@ export function spawnCodexAppServerTurn(
     ? session.workingDirectory.replace("~", home)
     : session.workingDirectory;
 
-  const child = child_process.spawn("codex", ["app-server", "--listen", "stdio://"], {
+  const codexBin = process.env.OPENVIDE_CODEX_BIN ?? "codex";
+  const child = child_process.spawn(codexBin, ["app-server", "--listen", "stdio://"], {
     cwd: resolvedCwd,
     stdio: ["pipe", "pipe", "pipe"],
     env: augmentedEnv(),
@@ -765,6 +766,20 @@ export function spawnCodexAppServerTurn(
         const result = threadStart["result"] as Record<string, unknown> | undefined;
         const thread = result?.["thread"] as Record<string, unknown> | undefined;
         threadId = typeof thread?.["id"] === "string" ? thread["id"] : undefined;
+      } else {
+        const threadResume = await request("thread/resume", {
+          threadId,
+          cwd: resolvedCwd,
+          approvalPolicy: askMode ? "on-request" : "never",
+          ...(askMode ? { approvalsReviewer: "user", sandbox: "workspace-write" } : {}),
+          ...(turnOpts.model ? { model: turnOpts.model } : {}),
+        });
+        const result = threadResume["result"] as Record<string, unknown> | undefined;
+        const thread = result?.["thread"] as Record<string, unknown> | undefined;
+        const resumedThreadId = typeof thread?.["id"] === "string" ? thread["id"] : undefined;
+        if (resumedThreadId) {
+          threadId = resumedThreadId;
+        }
       }
 
       if (!threadId) {
