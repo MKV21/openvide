@@ -14,11 +14,11 @@ import { line, separator } from 'even-toolkit/types';
 import { compactHeader } from '../header';
 import { truncate, applyScrollIndicators } from 'even-toolkit/text-utils';
 import { buildActionBar } from 'even-toolkit/action-bar';
-import { createModeEncoder } from 'even-toolkit/glass-mode';
 import { moveHighlight, clampIndex } from 'even-toolkit/glass-nav';
 import { fieldJoin, SEP } from 'even-toolkit/glass-format';
 import type { OpenVideSnapshot, OpenVideActions } from '../types';
 import { resolveGlassSessionMeta } from '../session-meta';
+import { liveOutputChatMode as chatMode } from '../live-output-mode';
 import {
   parseAgentMessageDelta,
   parseAgentMessageFinal,
@@ -28,16 +28,6 @@ import {
 } from '../../domain/output-parser';
 import { t as translate } from '../../utils/i18n';
 import type { AppLanguage } from '../../utils/i18n';
-
-const CHAT_MODE_STRIDE = 100_000;
-
-const chatMode = createModeEncoder({
-  buttons: 0,
-  read: CHAT_MODE_STRIDE,             // read collapsed: offset = output line index
-  readOpen: CHAT_MODE_STRIDE * 2,     // read expanded: offset = output line index
-  modeSelect: CHAT_MODE_STRIDE * 3,
-  modelSelect: CHAT_MODE_STRIDE * 4,
-});
 
 const MODE_OPTIONS = [
   { id: 'auto', label: 'Auto' },
